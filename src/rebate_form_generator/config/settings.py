@@ -16,6 +16,7 @@ class Settings:
         self.dt_kb: str = ""
         self.peripheral: str = ""
         self.output_path: str = str(DEFAULT_OUTPUT)
+        self.last_fy: str = ""
         self._load()
 
     def _load(self) -> None:
@@ -27,6 +28,7 @@ class Settings:
             self.dt_kb = data.get("dt_kb", "")
             self.peripheral = data.get("peripheral", "")
             self.output_path = data.get("output_path", str(DEFAULT_OUTPUT))
+            self.last_fy = data.get("last_fy", "")
         except Exception:
             pass
 
@@ -36,6 +38,7 @@ class Settings:
             "dt_kb": self.dt_kb,
             "peripheral": self.peripheral,
             "output_path": self.output_path,
+            "last_fy": self.last_fy,
         }
         CONFIG_FILE.write_text(
             json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"

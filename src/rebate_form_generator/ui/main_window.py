@@ -9,7 +9,7 @@ import sys
 import threading
 import traceback
 from pathlib import Path
-from tkinter import filedialog
+from tkinter import BooleanVar, filedialog
 
 import customtkinter as ctk
 
@@ -17,11 +17,24 @@ from rebate_form_generator.config.settings import Settings
 from rebate_form_generator.consolidation.pipeline import (
     get_available_fy_sheets,
     run_full_pipeline,
+    run_rebate_form_pipeline,
 )
+from rebate_form_generator.consolidation.stage6_rebate_form import current_fy_quarter
 
 # Must be set at module level, before any CTk widget is instantiated
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
+
+# Optional columns available in the Generate Form Data dialog
+_OPTIONAL_COLUMNS: list[str] = [
+    "Segment", "Category", "SPM (Project Owner)", "HP/ODM Part#",
+    "Series", "Platforms/Project", "Product", "Size",
+    "Product Type", "Color", "ODM (Regional Site)", "IncoTerm",
+]
+_DEFAULT_CHECKED: frozenset[str] = frozenset([
+    "Segment", "Category", "HP/ODM Part#", "Platforms/Project",
+    "Product", "Size", "ODM (Regional Site)",
+])
 
 
 class FySelectionDialog(ctk.CTkToplevel):
@@ -35,6 +48,7 @@ class FySelectionDialog(ctk.CTkToplevel):
         output_path: Path,
         log_callback,
         coverage: dict | None = None,
+        fy_confirmed_callback=None,
     ) -> None:
         super().__init__(parent)
         self.title("Generate")
@@ -45,6 +59,7 @@ class FySelectionDialog(ctk.CTkToplevel):
         self._output_path = output_path
         self._log_callback = log_callback
         self._coverage = coverage or {}
+        self._fy_confirmed_callback = fy_confirmed_callback
 
         # ── Layout ──────────────────────────────────────────────────────
         self.grid_columnconfigure(0, weight=1)
@@ -59,8 +74,13 @@ class FySelectionDialog(ctk.CTkToplevel):
             self, values=fy_sheets, width=200, command=self._update_info
         )
         self._fy_menu.grid(row=1, column=0, padx=24, pady=(4, 8))
-        if fy_sheets:
-            self._fy_menu.set(fy_sheets[0])
+        def _fy_key(s: str) -> int:
+            digits = "".join(c for c in s if c.isdigit())
+            return int(digits) if digits else 0
+
+        default_fy = max(fy_sheets, key=_fy_key) if fy_sheets else ""
+        if default_fy:
+            self._fy_menu.set(default_fy)
 
         self._info_box = ctk.CTkTextbox(
             self,
@@ -80,8 +100,8 @@ class FySelectionDialog(ctk.CTkToplevel):
             fg_color="transparent", border_width=1, command=self.destroy,
         ).pack(side="left")
 
-        if fy_sheets:
-            self._update_info(fy_sheets[0])
+        if default_fy:
+            self._update_info(default_fy)
 
         # ── Centre over parent ───────────────────────────────────────────
         W, H = 320, 300
@@ -128,6 +148,8 @@ class FySelectionDialog(ctk.CTkToplevel):
         source_paths = self._source_paths
         output_path = self._output_path
         log = self._log_callback
+        if self._fy_confirmed_callback:
+            self._fy_confirmed_callback(fy_sheet)
         self.destroy()  # close dialog immediately
 
         def worker() -> None:
@@ -137,6 +159,127 @@ class FySelectionDialog(ctk.CTkToplevel):
                     log(f"=== Pricing Template written \u2192 {result} ===", "INFO")
                 else:
                     log("Failed to write Pricing Template. See log for details.", "ERROR")
+            except Exception as exc:
+                log(f"Error: {exc}", "ERROR")
+                log(traceback.format_exc(), "ERROR")
+
+        threading.Thread(target=worker, daemon=True).start()
+
+
+class QuarterSelectionDialog(ctk.CTkToplevel):
+    """Pop-up for selecting FY + quarter and generating the rebate form input.xlsx."""
+
+    def __init__(
+        self,
+        parent: ctk.CTk,
+        output_path: Path,
+        log_callback,
+        last_fy: str | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.title("Generate Form Data")
+        self.resizable(False, False)
+        self.grab_set()
+
+        self._output_path = output_path
+        self._log_callback = log_callback
+        self._last_fy = last_fy
+
+        self.grid_columnconfigure(0, weight=1)
+
+        # ── Quarter selector ──────────────────────────────────────────────
+        ctk.CTkLabel(
+            self,
+            text="Select Quarter",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, padx=24, pady=(20, 4))
+
+        options = self._make_options()
+        default = self._default_option()
+
+        self._quarter_menu = ctk.CTkOptionMenu(self, values=options, width=200)
+        self._quarter_menu.grid(row=1, column=0, padx=24, pady=(4, 12))
+        self._quarter_menu.set(default)
+
+        # ── Column checkboxes ─────────────────────────────────────────────
+        chk_frame = ctk.CTkFrame(self)
+        chk_frame.grid(row=2, column=0, padx=16, pady=(0, 12), sticky="ew")
+        chk_frame.grid_columnconfigure((0, 1), weight=1)
+
+        ctk.CTkLabel(
+            chk_frame, text="Include Columns", font=ctk.CTkFont(weight="bold")
+        ).grid(row=0, column=0, columnspan=2, padx=10, pady=(8, 4), sticky="w")
+
+        self._col_vars: dict[str, BooleanVar] = {}
+        for idx, col in enumerate(_OPTIONAL_COLUMNS):
+            var = BooleanVar(value=col in _DEFAULT_CHECKED)
+            self._col_vars[col] = var
+            r = (idx // 2) + 1
+            c = idx % 2
+            ctk.CTkCheckBox(
+                chk_frame, text=col, variable=var,
+                checkbox_width=18, checkbox_height=18, font=ctk.CTkFont(size=12),
+            ).grid(row=r, column=c, padx=(10, 4), pady=2, sticky="w")
+
+        # ── Buttons ───────────────────────────────────────────────────────
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=3, column=0, padx=24, pady=(4, 20))
+        ctk.CTkButton(
+            btn_frame, text="Generate", width=110, height=34, command=self._on_generate,
+        ).pack(side="left", padx=(0, 10))
+        ctk.CTkButton(
+            btn_frame, text="Close", width=80, height=34,
+            fg_color="transparent", border_width=1, command=self.destroy,
+        ).pack(side="left")
+
+        W, H = 400, 440
+        self.update_idletasks()
+        px, py = parent.winfo_x(), parent.winfo_y()
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        self.geometry(f"{W}x{H}+{px + (pw - W) // 2}+{py + (ph - H) // 2}")
+        self.attributes("-topmost", True)
+        self.lift()
+        self.after(100, lambda: self.attributes("-topmost", False))
+
+    def _make_options(self) -> list[str]:
+        if self._last_fy:
+            fy_label = self._last_fy.upper()  # e.g. "FY26"
+            return [f"{fy_label} Q{q}" for q in range(1, 5)]
+        fy, _ = current_fy_quarter()
+        options = []
+        for fy_off in range(-2, 2):
+            fy_val = (fy + fy_off) % 100
+            for q in range(1, 5):
+                options.append(f"FY{fy_val:02d} Q{q}")
+        return options
+
+    def _default_option(self) -> str:
+        cur_fy, cur_q = current_fy_quarter()
+        if self._last_fy:
+            fy_num = int(self._last_fy.upper().lstrip("FY"))
+            if fy_num == cur_fy % 100:
+                return f"{self._last_fy.upper()} Q{cur_q}"
+            return f"{self._last_fy.upper()} Q1"
+        return f"FY{cur_fy % 100:02d} Q{cur_q}"
+
+    def _on_generate(self) -> None:
+        label = self._quarter_menu.get()  # e.g. "FY26 Q3"
+        selected_columns = [col for col, var in self._col_vars.items() if var.get()]
+        output_path = self._output_path
+        log = self._log_callback
+        self.destroy()
+
+        parts = label.split()
+        fy = int(parts[0][2:])
+        q = int(parts[1][1:])
+
+        def worker() -> None:
+            try:
+                result = run_rebate_form_pipeline(output_path, fy, q, selected_columns, log)
+                if result:
+                    log(f"=== Form Data saved \u2192 {result} ===", "INFO")
+                else:
+                    log("Failed to generate form data. See log for details.", "ERROR")
             except Exception as exc:
                 log(f"Error: {exc}", "ERROR")
                 log(traceback.format_exc(), "ERROR")
@@ -156,6 +299,7 @@ class MainWindow(ctk.CTk):
         self._source_paths: dict = {}
         self._output_path: Path | None = None
         self._is_running = False
+        self._last_fy: str | None = None
 
         self._build_ui()
         self._load_config()
@@ -205,14 +349,25 @@ class MainWindow(ctk.CTk):
         self._output_var = ctk.StringVar()
         self._add_path_row(out_frame, "Output Path:", self._output_var, row=1)
 
-        # ── Build button ────────────────────────────────────────────────
+        # ── Action buttons ──────────────────────────────────────────────
+        btn_row = ctk.CTkFrame(self, fg_color="transparent")
+        btn_row.grid(row=3, column=0, padx=16, pady=(8, 4))
+
         self._build_btn = ctk.CTkButton(
-            self,
+            btn_row,
             text="Consolidate Rebate Data",
             height=34,
             command=self._on_build,
         )
-        self._build_btn.grid(row=3, column=0, padx=16, pady=(8, 4))
+        self._build_btn.pack(side="left", padx=(0, 10))
+
+        self._rebate_form_btn = ctk.CTkButton(
+            btn_row,
+            text="Generate Form Data",
+            height=34,
+            command=self._on_rebate_form,
+        )
+        self._rebate_form_btn.pack(side="left")
 
         # ── Log ─────────────────────────────────────────────────────────
         log_frame = ctk.CTkFrame(self)
@@ -257,12 +412,14 @@ class MainWindow(ctk.CTk):
         self._dt_kb_var.set(self._settings.dt_kb)
         self._peripheral_var.set(self._settings.peripheral)
         self._output_var.set(self._settings.output_path)
+        self._last_fy = self._settings.last_fy or None
 
     def _save_config(self) -> None:
         self._settings.nb_kb = self._nb_kb_var.get()
         self._settings.dt_kb = self._dt_kb_var.get()
         self._settings.peripheral = self._peripheral_var.get()
         self._settings.output_path = self._output_var.get()
+        self._settings.last_fy = self._last_fy or ""
         self._settings.save()
 
     # ------------------------------------------------------------------
@@ -332,6 +489,11 @@ class MainWindow(ctk.CTk):
         else:
             self._log("Build completed but no FY sheets found. Check source paths.", "WARNING")
 
+    def _on_fy_confirmed(self, fy: str) -> None:
+        self._last_fy = fy
+        self._settings.last_fy = fy
+        self._settings.save()
+
     def _open_fy_dialog(self, fy_sheets: list[str], coverage: dict) -> None:
         dialog = FySelectionDialog(
             parent=self,
@@ -340,6 +502,32 @@ class MainWindow(ctk.CTk):
             output_path=self._output_path,
             log_callback=self._log,
             coverage=coverage,
+            fy_confirmed_callback=self._on_fy_confirmed,
+        )
+        dialog.focus()
+
+    def _on_rebate_form(self) -> None:
+        output_str = self._output_var.get().strip()
+        if not output_str:
+            self._append_log("[ERROR] Please set the Output Path first.")
+            return
+        output_path = Path(output_str)
+        rebate_raw = output_path.parent / "rebate raw" / "rebate raw.xlsx"
+        if not rebate_raw.exists():
+            self._append_log(
+                "[ERROR] rebate raw.xlsx not found. "
+                "Run 'Consolidate Rebate Data' and select a FY first."
+            )
+            return
+        self._output_path = output_path
+        self._open_quarter_dialog()
+
+    def _open_quarter_dialog(self) -> None:
+        dialog = QuarterSelectionDialog(
+            parent=self,
+            output_path=self._output_path,
+            log_callback=self._log,
+            last_fy=self._last_fy,
         )
         dialog.focus()
 
@@ -349,7 +537,9 @@ class MainWindow(ctk.CTk):
 
     def _set_running(self, running: bool) -> None:
         self._is_running = running
-        self._build_btn.configure(state="disabled" if running else "normal")
+        state = "disabled" if running else "normal"
+        self._build_btn.configure(state=state)
+        self._rebate_form_btn.configure(state=state)
 
     def _append_log(self, msg: str) -> None:
         self._log_box.configure(state="normal")

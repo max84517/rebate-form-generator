@@ -39,6 +39,7 @@ from .stage2_segment import consolidate_segment
 from .stage3_all import consolidate_all
 from .stage4_rebate import build_rebate_only
 from .stage5_template import write_pricing_template
+from .stage6_rebate_form import generate_rebate_form
 
 # Module-level cache: stores results from the last successful Stage 1-4 run
 _cache: dict = {
@@ -271,3 +272,23 @@ def check_missing_fy_sheets(
                 missing.append(supplier)
                 log(f"  MISSING {target}: {supplier}", "WARNING")
     return missing
+
+
+def run_rebate_form_pipeline(
+    output_path: Path,
+    fy: int,
+    quarter: int,
+    selected_columns: list[str],
+    log: Callable[[str, str], None],
+) -> Path | None:
+    """Stage 6: generate ``input.xlsx`` from ``rebate raw.xlsx``.
+
+    *fy* is the 2-digit FY year (e.g. 26 for FY26).
+    *quarter* is 1–4.
+    *selected_columns* are the optional feature columns to keep.
+    Returns the path to ``input.xlsx``, or ``None`` on failure.
+    """
+    rebate_raw_path = output_path.parent / "rebate raw" / "rebate raw.xlsx"
+    output_dir = output_path.parent / "rebate form input"
+    log(f"=== Stage 6: Generate Form Data (FY{fy:02d} Q{quarter}) ===", "INFO")
+    return generate_rebate_form(rebate_raw_path, fy, quarter, selected_columns, output_dir, log)
