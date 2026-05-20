@@ -1,6 +1,6 @@
 # Rebate Form Generator
 
-A dark-mode desktop tool that reads supplier Master Price Table workbooks and produces a consolidated **Pricing Template** ready for the Input Device rebate contract process.
+A dark-mode desktop tool that reads supplier Master Price Table workbooks and produces a consolidated **Rebate Raw** workbook ready for the Input Device rebate contract process.
 
 ## Features
 
@@ -10,7 +10,7 @@ A dark-mode desktop tool that reads supplier Master Price Table workbooks and pr
 | 2 – Segment | Consolidates all suppliers per segment (bNB, cNB, DT, Peripheral) |
 | 3 – All | Merges the four segment files into one workbook |
 | 4 – Rebate Only | Strips HP Cost / ODM Cost columns |
-| 5 – Template | Filters to a chosen FY sheet, removes blank Platforms/Project rows, outputs `Pricing_Template_InputDevices.xlsx` |
+| 5 – Rebate Raw | Filters to a chosen FY sheet, removes blank Platforms/Project rows, outputs `rebate raw.xlsx` |
 
 ## Requirements
 
@@ -33,12 +33,12 @@ poetry run rebate-form-generator
 
 1. Set the three **Source Folder** paths (NB KB, DT KB, Peripheral).
 2. Set an **Output Path** (defaults to `data/output`).
-3. Click **Build Pricing Data** — stages 1–4 run; on completion a popup appears.
-4. Select the FY sheet and click **Write Pricing Template** — the dialog closes and stage 5 runs in the background; the result path is logged in the main window.
+3. Click **Consolidate Rebate Data** — stages 1–4 run; on completion a FY selection popup appears.
+4. The popup shows which suppliers have data for each FY. Select the target FY and click **Generate** — the dialog closes and stage 5 runs in the background; the output path is logged in the main window.
 
 ## Source folder naming convention
 
-Each source folder must contain a sub-folder named:
+Each source folder must contain sub-folders named:
 
 ```
 Master price table_<Segment>_<Supplier>
@@ -49,18 +49,20 @@ e.g. `Master price table_NB_CHICONY`, `Master price table_DT_PRIMAX`
 ## Output layout
 
 ```
-data/
-├── output/            ← stage 2-4 intermediate files (tmp/)
-├── pricing data/      ← Pricing_Template_InputDevices.xlsx
-└── source data/
-    ├── NB/
-    │   ├── bNB/       ← processed bNB workbooks per supplier
-    │   └── cNB/       ← processed cNB workbooks per supplier
-    ├── DT/
-    └── Peripheral/
+<output path>/
+├── source data/
+│   ├── NB/
+│   │   ├── bNB/       ← processed bNB workbooks per supplier
+│   │   └── cNB/       ← processed cNB workbooks per supplier
+│   ├── DT/
+│   └── Peripheral/
+├── rebate raw/
+│   └── rebate raw.xlsx  ← final output (stage 5)
+├── rebate form input/   ← user-managed input files
+└── template/            ← Word / Excel templates
 ```
 
-`source data` and `pricing data` are regenerated on every build run.
+`source data` and `rebate raw` are regenerated on every run. Stage 2–4 intermediates are written to the system temp folder and cleaned up automatically.
 
 ## Configuration
 
@@ -79,7 +81,7 @@ Settings are stored in `config.json` (project root, git-ignored):
 src/rebate_form_generator/
 ├── main.py
 ├── ui/
-│   └── main_window.py        ← CustomTkinter dark-mode UI
+│   └── main_window.py        ← CustomTkinter dark-mode UI + FY dialog
 ├── config/
 │   └── settings.py           ← load / save config.json
 └── consolidation/

@@ -167,6 +167,8 @@ def ingest_nb(
     for d in (raw_bnb, raw_cnb):
         d.mkdir(parents=True, exist_ok=True)
 
+    coverage_bnb: dict[str, list[str]] = {}
+    coverage_cnb: dict[str, list[str]] = {}
     for supplier_name, data in supplier_data.items():
         wb_bnb: Workbook = Workbook()
         wb_bnb.remove(wb_bnb.active)  # type: ignore[arg-type]
@@ -188,15 +190,14 @@ def ingest_nb(
         if wb_bnb.worksheets:
             wb_bnb.save(raw_bnb / orig_name)
             log(f"    → bNB/{orig_name}  ({len(wb_bnb.worksheets)} sheets)", "INFO")
+            coverage_bnb[supplier_name] = [ws.title for ws in wb_bnb.worksheets]
 
         if wb_cnb.worksheets:
             wb_cnb.save(raw_cnb / orig_name)
             log(f"    → cNB/{orig_name}  ({len(wb_cnb.worksheets)} sheets)", "INFO")
+            coverage_cnb[supplier_name] = [ws.title for ws in wb_cnb.worksheets]
 
-    return {
-        "bNB": [f.stem for f in raw_bnb.glob("*.xlsx")],
-        "cNB": [f.stem for f in raw_cnb.glob("*.xlsx")],
-    }
+    return {"bNB": coverage_bnb, "cNB": coverage_cnb}
 
 
 def ingest_segment(
@@ -209,7 +210,7 @@ def ingest_segment(
 
     *raw_dir* is the destination folder (e.g. ``source data/DT``).
     *segment_name* should be ``"DT"`` or ``"Peripheral"``.
-    Returns list of processed supplier names.
+    Returns ``{supplier_name: [FY sheets]}`` for processed suppliers.
     """
     seg_root = _find_segment_root(
         segment_path, f"Master price table_{segment_name}"
@@ -220,12 +221,12 @@ def ingest_segment(
             f"in {segment_path}",
             "ERROR",
         )
-        return []
+        return {}
 
     raw_dir.mkdir(parents=True, exist_ok=True)
 
     supplier_folder_re = _make_supplier_folder_re(segment_name)
-    suppliers: list[str] = []
+    coverage: dict[str, list[str]] = {}
     for supplier_folder in sorted(seg_root.iterdir()):
         if not supplier_folder.is_dir():
             continue
@@ -259,6 +260,6 @@ def ingest_segment(
         if wb_out.worksheets:
             wb_out.save(raw_dir / latest.name)
             log(f"    → {segment_name}/{latest.name}  ({len(wb_out.worksheets)} sheets)", "INFO")
-            suppliers.append(supplier_name)
+            coverage[supplier_name] = [ws.title for ws in wb_out.worksheets]
 
-    return suppliers
+    return coverage

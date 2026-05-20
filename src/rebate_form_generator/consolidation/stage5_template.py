@@ -91,7 +91,7 @@ def write_pricing_template(
 
     out_dir = output_base
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / "Pricing_Template_InputDevices.xlsx"
+    out_path = out_dir / "rebate raw.xlsx"
     out_wb.save(out_path)
     log(f"  [Template] saved → {out_path}  ({data_count} data rows)", "INFO")
     return out_path

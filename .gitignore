@@ -11,7 +11,8 @@ build/
 config.json
 data/output/
 data/source data/
-data/pricing data/
+data/rebate raw/
+data/rebate form input/
 
 # Keep the gitkeep placeholder
 !data/output/.gitkeep

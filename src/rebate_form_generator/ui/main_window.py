@@ -34,39 +34,94 @@ class FySelectionDialog(ctk.CTkToplevel):
         source_paths: dict,
         output_path: Path,
         log_callback,
+        coverage: dict | None = None,
     ) -> None:
         super().__init__(parent)
-        self.title("Write Pricing Template")
-        self.geometry("380x140")
+        self.title("Generate")
         self.resizable(False, False)
         self.grab_set()  # modal
 
         self._source_paths = source_paths
         self._output_path = output_path
         self._log_callback = log_callback
+        self._coverage = coverage or {}
 
+        # ── Layout ──────────────────────────────────────────────────────
         self.grid_columnconfigure(0, weight=1)
 
-        fy_row = ctk.CTkFrame(self, fg_color="transparent")
-        fy_row.grid(row=0, column=0, padx=20, pady=(18, 6), sticky="w")
-        ctk.CTkLabel(fy_row, text="FY Sheet:").pack(side="left", padx=(0, 8))
-        self._fy_menu = ctk.CTkOptionMenu(fy_row, values=fy_sheets, width=120)
-        self._fy_menu.pack(side="left")
+        ctk.CTkLabel(
+            self,
+            text="Select FY Sheet",
+            font=ctk.CTkFont(size=14, weight="bold"),
+        ).grid(row=0, column=0, padx=24, pady=(24, 4))
+
+        self._fy_menu = ctk.CTkOptionMenu(
+            self, values=fy_sheets, width=200, command=self._update_info
+        )
+        self._fy_menu.grid(row=1, column=0, padx=24, pady=(4, 8))
         if fy_sheets:
             self._fy_menu.set(fy_sheets[0])
 
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.grid(row=1, column=0, padx=20, pady=(4, 16), sticky="e")
+        self._info_box = ctk.CTkTextbox(
+            self,
+            height=80,
+            state="disabled",
+            font=ctk.CTkFont(family="Consolas", size=11),
+        )
+        self._info_box.grid(row=2, column=0, padx=24, pady=(0, 12), sticky="ew")
+
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.grid(row=3, column=0, padx=24, pady=(0, 24))
         ctk.CTkButton(
-            btn_row, text="Close", fg_color="transparent", border_width=1,
-            width=80, height=30, command=self.destroy,
-        ).pack(side="left", padx=(0, 8))
+            btn_frame, text="Generate", width=110, height=34, command=self._on_write,
+        ).pack(side="left", padx=(0, 10))
         ctk.CTkButton(
-            btn_row,
-            text="Write Pricing Template",
-            width=180, height=30,
-            command=self._on_write,
+            btn_frame, text="Close", width=80, height=34,
+            fg_color="transparent", border_width=1, command=self.destroy,
         ).pack(side="left")
+
+        if fy_sheets:
+            self._update_info(fy_sheets[0])
+
+        # ── Centre over parent ───────────────────────────────────────────
+        W, H = 320, 300
+        self.update_idletasks()
+        px = parent.winfo_x()
+        py = parent.winfo_y()
+        pw = parent.winfo_width()
+        ph = parent.winfo_height()
+        x = px + (pw - W) // 2
+        y = py + (ph - H) // 2
+        self.geometry(f"{W}x{H}+{x}+{y}")
+
+        # Ensure the dialog appears on top of the main window
+        self.attributes("-topmost", True)
+        self.lift()
+        self.after(100, lambda: self.attributes("-topmost", False))
+
+    def _update_info(self, fy: str) -> None:
+        """Refresh the info box when the FY selection changes."""
+        fy_up = fy.strip().upper()
+        missing: list[str] = []
+        for seg, suppliers in self._coverage.items():
+            bad = [
+                sup for sup, fys in suppliers.items()
+                if fy_up not in [f.strip().upper() for f in fys]
+            ]
+            if bad:
+                missing.append(f"{seg}: {', '.join(bad)}")
+
+        if not self._coverage:
+            text = "(No coverage data)"
+        elif missing:
+            text = f"Missing {fy}:\n" + "\n".join(f"  {m}" for m in missing)
+        else:
+            text = f"✓  All segments have {fy}"
+
+        self._info_box.configure(state="normal")
+        self._info_box.delete("1.0", "end")
+        self._info_box.insert("1.0", text)
+        self._info_box.configure(state="disabled")
 
     def _on_write(self) -> None:
         fy_sheet = self._fy_menu.get()
@@ -112,7 +167,7 @@ class MainWindow(ctk.CTk):
 
     def _build_ui(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(5, weight=1)  # log frame expands
+        self.grid_rowconfigure(4, weight=1)  # log frame expands
 
         # Title
         ctk.CTkLabel(
@@ -153,20 +208,15 @@ class MainWindow(ctk.CTk):
         # ── Build button ────────────────────────────────────────────────
         self._build_btn = ctk.CTkButton(
             self,
-            text="Build Pricing Data",
+            text="Consolidate Rebate Data",
             height=34,
             command=self._on_build,
         )
-        self._build_btn.grid(row=3, column=0, padx=16, pady=(8, 4), sticky="w")
-
-        # ── Progress bar ────────────────────────────────────────────────
-        self._progress = ctk.CTkProgressBar(self, mode="indeterminate")
-        self._progress.grid(row=4, column=0, padx=16, pady=(0, 4), sticky="ew")
-        self._progress.set(0)
+        self._build_btn.grid(row=3, column=0, padx=16, pady=(8, 4))
 
         # ── Log ─────────────────────────────────────────────────────────
         log_frame = ctk.CTkFrame(self)
-        log_frame.grid(row=5, column=0, padx=16, pady=(0, 16), sticky="nsew")
+        log_frame.grid(row=4, column=0, padx=16, pady=(0, 16), sticky="nsew")
         log_frame.grid_columnconfigure(0, weight=1)
         log_frame.grid_rowconfigure(1, weight=1)
 
@@ -263,10 +313,10 @@ class MainWindow(ctk.CTk):
 
         def worker() -> None:
             try:
-                fy_sheets = get_available_fy_sheets(
+                fy_sheets, coverage = get_available_fy_sheets(
                     self._source_paths, self._output_path, self._log
                 )
-                self.after(0, lambda: self._on_build_done(fy_sheets))
+                self.after(0, lambda s=fy_sheets, c=coverage: self._on_build_done(s, c))
             except Exception as exc:  # pragma: no cover
                 self._log(f"Unexpected error: {exc}", "ERROR")
                 self._log(traceback.format_exc(), "ERROR")
@@ -274,21 +324,22 @@ class MainWindow(ctk.CTk):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    def _on_build_done(self, fy_sheets: list[str]) -> None:
+    def _on_build_done(self, fy_sheets: list[str], coverage: dict) -> None:
         self._set_running(False)
         if fy_sheets:
-            self._log("=== Build completed \u2014 opening FY selection window\u2026 ===", "INFO")
-            self._open_fy_dialog(fy_sheets)
+            self._log("=== Build completed — opening FY selection window… ===", "INFO")
+            self._open_fy_dialog(fy_sheets, coverage)
         else:
             self._log("Build completed but no FY sheets found. Check source paths.", "WARNING")
 
-    def _open_fy_dialog(self, fy_sheets: list[str]) -> None:
+    def _open_fy_dialog(self, fy_sheets: list[str], coverage: dict) -> None:
         dialog = FySelectionDialog(
             parent=self,
             fy_sheets=fy_sheets,
             source_paths=self._source_paths,
             output_path=self._output_path,
             log_callback=self._log,
+            coverage=coverage,
         )
         dialog.focus()
 
@@ -299,11 +350,6 @@ class MainWindow(ctk.CTk):
     def _set_running(self, running: bool) -> None:
         self._is_running = running
         self._build_btn.configure(state="disabled" if running else "normal")
-        if running:
-            self._progress.start()
-        else:
-            self._progress.stop()
-            self._progress.set(0)
 
     def _append_log(self, msg: str) -> None:
         self._log_box.configure(state="normal")

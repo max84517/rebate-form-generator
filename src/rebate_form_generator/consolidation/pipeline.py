@@ -28,6 +28,7 @@ from __future__ import annotations
 import os
 import shutil
 import stat
+import tempfile
 from pathlib import Path
 from typing import Callable
 
@@ -44,6 +45,7 @@ _cache: dict = {
     "rebate_path": None,
     "output_path": None,
     "pricing_data_dir": None,
+    "coverage": None,
 }
 
 
@@ -58,11 +60,11 @@ def get_available_fy_sheets(
     with the same *output_path* can skip Stages 1–4.
     """
     # Directories derived from output_path
-    #   data/output   → output_path   (tmp / consolidated files)
-    #   data/source data  → source of ingested supplier workbooks
-    #   data/pricing data → final Pricing Template
+    #   data/source data  → ingested supplier workbooks
+    #   data/pricing data → final output (rebate raw.xlsx)
+    #   system temp       → stage 2-4 intermediates (never written to data/)
     source_data_dir = output_path.parent / "source data"
-    pricing_data_dir = output_path.parent / "pricing data"
+    pricing_data_dir = output_path.parent / "rebate raw"
 
     def _rmtree(path: Path) -> None:
         def _on_err(func, p, exc_info):
@@ -83,20 +85,15 @@ def get_available_fy_sheets(
             log(f"  Clearing {seg_dir.name} source data …", "INFO")
             _rmtree(seg_dir)
 
-    # Clear previous tmp directory (stage 2-4 intermediates)
-    tmp_dir = output_path / "tmp"
+    # Remove legacy output/tmp if it still exists from an older run
+    legacy_tmp = output_path / "tmp"
+    if legacy_tmp.exists():
+        _rmtree(legacy_tmp)
+
+    # Stage 2-4 intermediates go to the system temp directory
+    tmp_dir = Path(tempfile.gettempdir()) / "rebate_form_generator"
     if tmp_dir.exists():
-        log("  Clearing previous tmp directory …", "INFO")
-
-        def _on_rm_error(func, path, exc_info):
-            """Remove read-only flag then retry — needed for OneDrive paths."""
-            try:
-                os.chmod(path, stat.S_IWRITE)
-                func(path)
-            except Exception:
-                pass  # best-effort; proceed even if a file can't be removed
-
-        shutil.rmtree(tmp_dir, onexc=_on_rm_error)
+        _rmtree(tmp_dir)
     tmp_dir.mkdir(parents=True, exist_ok=True)
 
     nb_kb = Path(source_paths["nb_kb"])
@@ -108,13 +105,21 @@ def get_available_fy_sheets(
     # ------------------------------------------------------------------
     log("=== Stage 1: Ingest ===", "INFO")
     log("Processing NB KB …", "INFO")
-    ingest_nb(nb_kb, source_data_dir / "NB", log)
+    nb_cov = ingest_nb(nb_kb, source_data_dir / "NB", log)
 
     log("Processing DT KB …", "INFO")
-    ingest_segment(dt_kb, "DT", source_data_dir / "DT", log)
+    dt_cov = ingest_segment(dt_kb, "DT", source_data_dir / "DT", log)
 
     log("Processing Peripheral …", "INFO")
-    ingest_segment(peripheral, "Peripheral", source_data_dir / "Peripheral", log)
+    peri_cov = ingest_segment(peripheral, "Peripheral", source_data_dir / "Peripheral", log)
+
+    # Build combined coverage: segment → {supplier: [FY sheets]}
+    coverage: dict[str, dict[str, list[str]]] = {
+        "bNB":        nb_cov.get("bNB", {}),
+        "cNB":        nb_cov.get("cNB", {}),
+        "DT":         dt_cov,
+        "Peripheral": peri_cov,
+    }
 
     # ------------------------------------------------------------------
     # Stage 2 — Consolidate by segment
@@ -149,16 +154,17 @@ def get_available_fy_sheets(
     _cache["rebate_path"] = rebate_path
     _cache["output_path"] = output_path
     _cache["pricing_data_dir"] = pricing_data_dir
+    _cache["coverage"] = coverage
 
     if rebate_path is None:
-        return []
+        return [], {}
 
     wb = load_workbook(rebate_path, data_only=True, read_only=True)
     fy_sheets = [ws.title for ws in wb.worksheets]
     wb.close()
 
     log(f"Available FY sheets: {fy_sheets}", "INFO")
-    return fy_sheets
+    return fy_sheets, coverage
 
 
 def run_full_pipeline(
