@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Project runtime
+config.json
+data/output/
+data/source data/
+data/pricing data/
+
+# Keep the gitkeep placeholder
+!data/output/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db

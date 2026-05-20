@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "rebate-form-generator"
+version = "0.1.0"
+description = "Rebate contract pricing template generator"
+authors = []
+packages = [{include = "rebate_form_generator", from = "src"}]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<4.0"
+openpyxl = ">=3.1"
+customtkinter = ">=5.2"
+
+[tool.poetry.scripts]
+rebate-form-generator = "rebate_form_generator.main:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
