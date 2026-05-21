@@ -38,19 +38,21 @@ def _get_latest_xlsx(folder: Path) -> Path | None:
 
 
 def _parse_supplier_name(folder_name: str) -> str:
-    """Extract supplier from folder name.
+    """Extract supplier from folder name, normalised to title-case.
 
     ``"Master price table_NB_Chicony"``  →  ``"Chicony"``
-    ``"Master price table_DT_CHICONY"``  →  ``"CHICONY"``
+    ``"Master price table_DT_CHICONY"``  →  ``"Chicony"``
+    ``"Master price table_NB_LiteOn"``   →  ``"Liteon"``
     """
     # Split on first underscore: "Master price table" + "NB_Chicony"
     parts = folder_name.split("_", 1)
     if len(parts) < 2:
-        return folder_name
+        return folder_name.title()
     rest = parts[1]          # "NB_Chicony"
     # Split on first underscore: "NB" + "Chicony"
     parts2 = rest.split("_", 1)
-    return parts2[1] if len(parts2) > 1 else rest
+    raw = parts2[1] if len(parts2) > 1 else rest
+    return raw.title()
 
 
 def _find_segment_root(parent: Path, keyword: str) -> Path | None:

@@ -1,6 +1,6 @@
 # Rebate Form Generator
 
-A dark-mode desktop tool that reads supplier Master Price Table workbooks, consolidates them into a **Rebate Raw** workbook, and generates **Form Data input** for the Input Device rebate contract process.
+A dark-mode desktop tool that reads supplier Master Price Table workbooks, consolidates them into a **Rebate Raw** workbook, generates **Form Data input**, and produces per-supplier **Word contract update forms** for the Input Device rebate process.
 
 ## Features
 
@@ -11,7 +11,8 @@ A dark-mode desktop tool that reads supplier Master Price Table workbooks, conso
 | 3 – All | Merges the four segment files into one workbook |
 | 4 – Rebate Only | Strips HP Cost / ODM Cost columns |
 | 5 – Rebate Raw | Filters to a chosen FY sheet, removes blank Platforms/Project rows, outputs `rebate raw.xlsx` |
-| 6 – Form Data | Filters to a chosen FY + quarter, expands price-change rows, deduplicates, outputs `input.xlsx` |
+| 6 – Form Data | Filters to a chosen FY + quarter, expands price-change rows, deduplicates, outputs per-supplier `contract input - <Supplier>.xlsx` |
+| 7 – Report | Fills a Word template with supplier info and product rebate table, outputs per-supplier `.docx` contracts |
 
 ## Requirements
 
@@ -45,7 +46,7 @@ poetry run rebate-form-generator
 2. A popup lets you:
    - Select the **FY + Quarter** (quarter rules below; defaults to the current quarter)
    - Choose which **feature columns** to include (7 pre-selected by default)
-3. Click **Generate** — the tool filters `rebate raw.xlsx` to the three months of the selected quarter, expands rows for price changes within the quarter, deduplicates, and writes `rebate form input/input.xlsx`.
+3. Click **Generate** — outputs `rebate form input/contract input - <Supplier>.xlsx` per supplier.
 
 The selected FY is remembered in `config.json` so the quarter dropdown shows only that FY's four quarters on the next launch.
 
@@ -65,6 +66,19 @@ Example: **FY26 Q1** covers Nov 2025, Dec 2025, Jan 2026.
 Selected feature columns + **GTK Suppliers** (always included) + **Per-Unit Rebate Amount $USD** (currency-formatted) + **Rebate Period Start Date**
 
 Each source row produces 1–3 output rows depending on whether the rebate price changes month-to-month within the quarter. Duplicate rows are dropped automatically.
+
+### Generate Report (Stage 7)
+
+1. Place the Word template (`Rebate Agreement Update Form_*.docx`) in the `template/` folder under your output parent directory.
+2. Place the supplier info Excel (`Contract Source info.xlsx`) in the `supplier info/` folder.
+3. Click **Generate Report**, select the suppliers and enter the Form #, then click **Generate**.
+4. The tool fills keyword placeholders in the template (`<Supplier Name>`, `<Contract Number>`, `<Version>`, `<Name of Entity>`, `<Address>`, `<Signer>`, `<Title>`, `<SUPPLIER-Sign>`), inserts product rebate data into the table, and saves one `.docx` per supplier.
+
+> **Template note:** The footer's page-number field (`PAGE`) must be a real Word field (not static text). Keyword placeholders in the footer are replaced using run-by-run substitution to preserve the field structure.
+
+### Run All
+
+Click **Run All** (green button, far right) to execute all three stages in sequence. Each stage still opens its own confirmation dialog so you can review settings before proceeding.
 
 ## Source folder naming convention
 
@@ -86,13 +100,17 @@ e.g. `Master price table_NB_CHICONY`, `Master price table_DT_PRIMAX`
 │   ├── DT/
 │   └── Peripheral/
 ├── rebate raw/
-│   └── rebate raw.xlsx     ← stage 5 output
+│   └── rebate raw.xlsx           ← stage 5 output
 ├── rebate form input/
-│   └── input.xlsx          ← stage 6 output
-└── template/               ← Word / Excel templates (user-managed)
+│   └── contract input - <Supplier>.xlsx  ← stage 6 output (one per supplier)
+├── supplier info/
+│   └── Contract Source info.xlsx ← user-managed; required for stage 7
+├── template/
+│   └── Rebate Agreement Update Form_*.docx  ← user-managed Word template
+└── output/
+    └── <YYYYMMDD>/
+        └── Rebate Agreement Update Form#<N>_<Supplier>.docx  ← stage 7 output
 ```
-
-`source data`, `rebate raw`, and `rebate form input` are regenerated on each run. Stage 2–4 intermediates go to the system temp folder and are cleaned up automatically.
 
 ## Configuration
 
@@ -122,5 +140,6 @@ src/rebate_form_generator/
     ├── stage3_all.py
     ├── stage4_rebate.py
     ├── stage5_template.py
-    └── stage6_rebate_form.py
+    ├── stage6_rebate_form.py
+    └── stage7_report.py      ← Word contract generation
 ```

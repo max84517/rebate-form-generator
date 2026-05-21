@@ -12,6 +12,7 @@ Example: FY26 Q1 → Nov 2025, Dec 2025, Jan 2026
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 from typing import Callable
@@ -78,17 +79,19 @@ def generate_rebate_form(
     selected_columns: list[str],
     output_dir: Path,
     log: Callable[[str, str], None],
-) -> Path | None:
-    """Read rebate raw.xlsx and write input.xlsx for the given FY + quarter.
+) -> list[Path]:
+    """Read rebate raw.xlsx and write per-supplier contract input files.
 
     For each data row the function emits 1–3 output rows depending on whether
     the rebate price changes across the three months of the quarter.
+    Rows are split by GTK Suppliers and saved as
+    ``contract input - <Supplier>.xlsx``.
 
-    Returns the path to ``input.xlsx``, or ``None`` on failure.
+    Returns a list of paths to the written files (empty list on failure).
     """
     if not rebate_raw_path.exists():
         log(f"rebate raw.xlsx not found: {rebate_raw_path}", "ERROR")
-        return None
+        return []
 
     wb_in = load_workbook(rebate_raw_path, data_only=True)
     ws_in = wb_in.active
@@ -132,17 +135,15 @@ def generate_rebate_form(
     else:
         log("  'GTK Suppliers' column not found in data", "WARNING")
 
-    # ── Build output workbook ─────────────────────────────────────────────
-    wb_out = Workbook()
-    ws_out = wb_out.active
-    ws_out.title = "Input"
+    # Index of the supplier value inside each output row tuple
+    supplier_tuple_idx: int | None = (
+        len(feature_col_indices) - 1 if gtk_col_idx is not None else None
+    )
 
     out_headers = feature_headers + ["Per-Unit Rebate Amount $USD", "Rebate Period Start Date"]
-    ws_out.append(out_headers)
+    price_col = len(feature_headers) + 1  # 1-based
 
-    price_col = len(feature_headers) + 1  # 1-based column index for the price cell
-
-    # Collect all rows first (for deduplication)
+    # ── Collect all rows ──────────────────────────────────────────────────
     all_rows: list[tuple] = []
     for row in ws_in.iter_rows(min_row=2, values_only=True):
         feature_vals = [row[i] if i < len(row) else None for i in feature_col_indices]
@@ -162,7 +163,7 @@ def generate_rebate_form(
         for price, seg_date in segments:
             all_rows.append(tuple(feature_vals + [price, seg_date]))
 
-    # Deduplicate while preserving order
+    # ── Deduplicate while preserving order ───────────────────────────────
     seen: set[tuple] = set()
     unique_rows: list[tuple] = []
     for row_tuple in all_rows:
@@ -174,14 +175,29 @@ def generate_rebate_form(
     if dropped:
         log(f"  Dropped {dropped} duplicate row(s)", "INFO")
 
-    rows_written = 0
+    # ── Group by supplier ─────────────────────────────────────────────────
+    supplier_rows: dict[str, list[tuple]] = defaultdict(list)
     for row_tuple in unique_rows:
-        ws_out.append(list(row_tuple))
-        rows_written += 1
-        ws_out.cell(row=rows_written + 1, column=price_col).number_format = '"$"#,##0.00'
+        if supplier_tuple_idx is not None:
+            supplier = str(row_tuple[supplier_tuple_idx] or "Unknown").strip()
+        else:
+            supplier = "Unknown"
+        supplier_rows[supplier].append(row_tuple)
 
+    # ── Write one file per supplier ───────────────────────────────────────
     output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / "input.xlsx"
-    wb_out.save(out_path)
-    log(f"  Saved {rows_written} rows → {out_path}", "INFO")
-    return out_path
+    out_paths: list[Path] = []
+    for supplier, rows in sorted(supplier_rows.items()):
+        wb_out = Workbook()
+        ws_out = wb_out.active
+        ws_out.title = "Input"
+        ws_out.append(out_headers)
+        for i, row_tuple in enumerate(rows, start=2):
+            ws_out.append(list(row_tuple))
+            ws_out.cell(row=i, column=price_col).number_format = '"$"#,##0.00'
+        out_path = output_dir / f"contract input - {supplier}.xlsx"
+        wb_out.save(out_path)
+        log(f"  Saved {len(rows)} rows → {out_path.name}", "INFO")
+        out_paths.append(out_path)
+
+    return out_paths

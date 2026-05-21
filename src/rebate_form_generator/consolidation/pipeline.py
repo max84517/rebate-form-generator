@@ -40,6 +40,7 @@ from .stage3_all import consolidate_all
 from .stage4_rebate import build_rebate_only
 from .stage5_template import write_pricing_template
 from .stage6_rebate_form import generate_rebate_form
+from .stage7_report import generate_report
 
 # Module-level cache: stores results from the last successful Stage 1-4 run
 _cache: dict = {
@@ -280,15 +281,38 @@ def run_rebate_form_pipeline(
     quarter: int,
     selected_columns: list[str],
     log: Callable[[str, str], None],
-) -> Path | None:
-    """Stage 6: generate ``input.xlsx`` from ``rebate raw.xlsx``.
+) -> list[Path]:
+    """Stage 6: generate per-supplier contract input files from ``rebate raw.xlsx``.
 
     *fy* is the 2-digit FY year (e.g. 26 for FY26).
     *quarter* is 1–4.
     *selected_columns* are the optional feature columns to keep.
-    Returns the path to ``input.xlsx``, or ``None`` on failure.
+    Returns a list of paths to the written files (empty list on failure).
     """
     rebate_raw_path = output_path.parent / "rebate raw" / "rebate raw.xlsx"
     output_dir = output_path.parent / "rebate form input"
     log(f"=== Stage 6: Generate Form Data (FY{fy:02d} Q{quarter}) ===", "INFO")
     return generate_rebate_form(rebate_raw_path, fy, quarter, selected_columns, output_dir, log)
+
+
+def run_report_pipeline(
+    output_path: Path,
+    suppliers: list[str],
+    form_number: str,
+    log: Callable[[str, str], None],
+) -> list[Path]:
+    """Stage 7: generate per-supplier Word contracts.
+
+    *suppliers* is the list of supplier names to process.
+    *form_number* is the user-supplied Form# string.
+    Returns a list of paths to the written .docx files.
+    """
+    base = output_path.parent
+    supplier_info_dir = base / "supplier info"
+    template_dir = base / "template"
+    rebate_form_input_dir = base / "rebate form input"
+    log(f"=== Stage 7: Generate Report (Form#{form_number}) ===", "INFO")
+    return generate_report(
+        supplier_info_dir, template_dir, rebate_form_input_dir,
+        output_path, suppliers, form_number, log,
+    )
