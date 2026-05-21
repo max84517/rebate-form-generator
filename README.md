@@ -6,7 +6,7 @@ A dark-mode desktop tool that reads supplier Master Price Table workbooks, conso
 
 | Stage | Description |
 |-------|-------------|
-| 1 – Ingest | Reads the latest `.xlsx` from each supplier folder, applies GTK Suppliers fix, splits NB into bNB / cNB |
+| 1 – Ingest | Reads the latest `.xlsx` from each supplier folder, applies GTK Suppliers fix, combines NB bNB + cNB into one workbook per supplier (`FY## bNB` / `FY## cNB` sheets) |
 | 2 – Segment | Consolidates all suppliers per segment (bNB, cNB, DT, Peripheral) |
 | 3 – All | Merges the four segment files into one workbook |
 | 4 – Rebate Only | Strips HP Cost / ODM Cost columns |
@@ -82,8 +82,7 @@ e.g. `Master price table_NB_CHICONY`, `Master price table_DT_PRIMAX`
 <output path parent>/
 ├── source data/
 │   ├── NB/
-│   │   ├── bNB/            ← processed bNB workbooks per supplier
-│   │   └── cNB/            ← processed cNB workbooks per supplier
+│   │   └── <Supplier>.xlsx ← one workbook per supplier; sheets: "FY## bNB", "FY## cNB"
 │   ├── DT/
 │   └── Peripheral/
 ├── rebate raw/
