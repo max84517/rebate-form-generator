@@ -27,17 +27,22 @@ def consolidate_segment(
     raw_dir: Path,
     output_base: Path,
     log: Callable[[str, str], None],
+    file_glob: str = "*.xlsx",
+    sheet_suffix: str | None = None,
 ) -> Path | None:
     """Consolidate all supplier xlsx files for *segment_name* into one workbook.
 
     *raw_dir* is the folder containing the per-supplier .xlsx files.
+    *file_glob* filters which files to include (default ``"*.xlsx"``).
+    *sheet_suffix* selects sheets by suffix, e.g. ``"bNB"`` matches ``"FY26 bNB"``;
+    when ``None`` the plain ``FY##`` sheet names are used (DT / Peripheral).
     Returns the path of the saved file, or ``None`` on failure.
     """
     if not raw_dir.exists():
         log(f"  [{segment_name}] raw dir not found: {raw_dir}", "ERROR")
         return None
 
-    xlsx_files = sorted(f for f in raw_dir.glob("*.xlsx") if not f.name.startswith("~$"))
+    xlsx_files = sorted(f for f in raw_dir.glob(file_glob) if not f.name.startswith("~$"))
     if not xlsx_files:
         log(f"  [{segment_name}] no .xlsx files in {raw_dir}", "WARNING")
         return None
@@ -45,13 +50,21 @@ def consolidate_segment(
     # -----------------------------------------------------------------------
     # Discover which FY sheets exist across all supplier files
     # -----------------------------------------------------------------------
+    if sheet_suffix:
+        _suffix_re = re.compile(
+            r"^FY(\d{2})\s+" + re.escape(sheet_suffix) + r"$", re.IGNORECASE
+        )
     all_fy: set[str] = set()
     for xlsx_path in xlsx_files:
         wb = load_workbook(xlsx_path, data_only=True, read_only=True)
         for ws in wb.worksheets:
-            t = ws.title.strip().upper()
-            if FY_SHEET_RE.match(t):
-                all_fy.add(t)
+            t = ws.title.strip()
+            if sheet_suffix:
+                m = _suffix_re.match(t)
+                if m:
+                    all_fy.add(f"FY{m.group(1).upper()}")
+            elif FY_SHEET_RE.match(t.upper()):
+                all_fy.add(t.upper())
         wb.close()
 
     if not all_fy:
@@ -73,8 +86,9 @@ def consolidate_segment(
         for xlsx_path in xlsx_files:
             wb = load_workbook(xlsx_path, data_only=True, read_only=True)
             ws = None
+            target = (f"{fy} {sheet_suffix}".upper() if sheet_suffix else fy.upper())
             for sheet in wb.worksheets:
-                if sheet.title.strip().upper() == fy:
+                if sheet.title.strip().upper() == target:
                     ws = sheet
                     break
 

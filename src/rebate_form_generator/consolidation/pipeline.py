@@ -126,16 +126,16 @@ def get_available_fy_sheets(
     # Stage 2 — Consolidate by segment
     # ------------------------------------------------------------------
     log("=== Stage 2: Consolidate by Segment ===", "INFO")
-    seg_raw_dirs = {
-        "bNB":        source_data_dir / "NB" / "bNB",
-        "cNB":        source_data_dir / "NB" / "cNB",
-        "DT":         source_data_dir / "DT",
-        "Peripheral": source_data_dir / "Peripheral",
-    }
+    nb_raw_dir = source_data_dir / "NB"
     segment_files: list[Path] = []
-    for seg, raw_dir in seg_raw_dirs.items():
+    for seg, raw_dir, suffix in [
+        ("bNB",        nb_raw_dir,                     "bNB"),
+        ("cNB",        nb_raw_dir,                     "cNB"),
+        ("DT",         source_data_dir / "DT",         None),
+        ("Peripheral", source_data_dir / "Peripheral", None),
+    ]:
         log(f"Consolidating {seg} …", "INFO")
-        path = consolidate_segment(seg, raw_dir, output_path, log)
+        path = consolidate_segment(seg, raw_dir, output_path, log, sheet_suffix=suffix)
         if path is not None:
             segment_files.append(path)
 

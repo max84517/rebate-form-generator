@@ -135,9 +135,10 @@ def ingest_nb(
         return {"bNB": [], "cNB": []}
 
     # -----------------------------------------------------------------------
-    # Pass 1 — find FY years that have BOTH cNB and bNB across ALL suppliers
+    # Pass 1 — find FY years that have BOTH cNB and bNB per supplier
+    # (each supplier is evaluated independently; no cross-supplier intersection)
     # -----------------------------------------------------------------------
-    valid_fy_per_supplier: list[set[str]] = []
+    valid_fy_per_supplier: dict[str, set[str]] = {}
     for supplier_name, data in supplier_data.items():
         fy_types: dict[str, set[str]] = {}
         for ws in data["wb"].worksheets:
@@ -146,56 +147,53 @@ def ingest_nb(
                 fy = f"FY{m.group(1)}"
                 nb_type = m.group(2).lower()
                 fy_types.setdefault(fy, set()).add(nb_type)
-        # Only years that have both 'c' and 'b'
+        # Only include FY years where THIS supplier has both 'b' and 'c'
         both = {fy for fy, types in fy_types.items() if "c" in types and "b" in types}
-        valid_fy_per_supplier.append(both)
-
-    if not valid_fy_per_supplier:
-        common_fy: set[str] = set()
-    else:
-        common_fy = valid_fy_per_supplier[0].copy()
-        for s in valid_fy_per_supplier[1:]:
-            common_fy &= s
-
-    log(f"  NB common FY (cNB ∩ bNB across all suppliers): {sorted(common_fy)}", "INFO")
+        valid_fy_per_supplier[supplier_name] = both
+        log(f"  NB {supplier_name} valid FY: {sorted(both)}", "INFO")
 
     # -----------------------------------------------------------------------
-    # Pass 2 — split into bNB / cNB workbooks
+    # Pass 2 — combine bNB + cNB into one workbook per supplier
     # -----------------------------------------------------------------------
-    raw_bnb = raw_nb_dir / "bNB"
-    raw_cnb = raw_nb_dir / "cNB"
-    for d in (raw_bnb, raw_cnb):
-        d.mkdir(parents=True, exist_ok=True)
+    raw_nb_dir.mkdir(parents=True, exist_ok=True)
 
     coverage_bnb: dict[str, list[str]] = {}
     coverage_cnb: dict[str, list[str]] = {}
     for supplier_name, data in supplier_data.items():
-        wb_bnb: Workbook = Workbook()
-        wb_bnb.remove(wb_bnb.active)  # type: ignore[arg-type]
-        wb_cnb: Workbook = Workbook()
-        wb_cnb.remove(wb_cnb.active)  # type: ignore[arg-type]
+        supplier_valid_fy = valid_fy_per_supplier.get(supplier_name, set())
+        wb_out: Workbook = Workbook()
+        wb_out.remove(wb_out.active)  # type: ignore[arg-type]
+
+        fy_bnb: list[str] = []
+        fy_cnb: list[str] = []
 
         for ws in data["wb"].worksheets:
             m = NB_SHEET_RE.match(ws.title.strip())
             if not m:
                 continue
             fy = f"FY{m.group(1)}"
-            if fy not in common_fy:
+            if fy not in supplier_valid_fy:
                 continue
             nb_type = m.group(2).lower()
-            target_wb = wb_bnb if nb_type == "b" else wb_cnb
-            _copy_ws_to_wb(ws, target_wb, fy)
+            sheet_name = f"{fy} bNB" if nb_type == "b" else f"{fy} cNB"
+            _copy_ws_to_wb(ws, wb_out, sheet_name)
+            if nb_type == "b":
+                fy_bnb.append(fy)
+            else:
+                fy_cnb.append(fy)
 
-        orig_name = data["path"].name
-        if wb_bnb.worksheets:
-            wb_bnb.save(raw_bnb / orig_name)
-            log(f"    → bNB/{orig_name}  ({len(wb_bnb.worksheets)} sheets)", "INFO")
-            coverage_bnb[supplier_name] = [ws.title for ws in wb_bnb.worksheets]
-
-        if wb_cnb.worksheets:
-            wb_cnb.save(raw_cnb / orig_name)
-            log(f"    → cNB/{orig_name}  ({len(wb_cnb.worksheets)} sheets)", "INFO")
-            coverage_cnb[supplier_name] = [ws.title for ws in wb_cnb.worksheets]
+        if wb_out.worksheets:
+            fname = f"{data['path'].stem}.xlsx"
+            wb_out.save(raw_nb_dir / fname)
+            log(
+                f"    → NB/{fname}  "
+                f"({len(fy_bnb)} bNB + {len(fy_cnb)} cNB sheets)",
+                "INFO",
+            )
+            if fy_bnb:
+                coverage_bnb[supplier_name] = fy_bnb
+            if fy_cnb:
+                coverage_cnb[supplier_name] = fy_cnb
 
     return {"bNB": coverage_bnb, "cNB": coverage_cnb}
 
