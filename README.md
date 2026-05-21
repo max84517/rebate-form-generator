@@ -36,9 +36,8 @@ poetry run rebate-form-generator
 ### Consolidate Rebate Data (Stages 1–5)
 
 1. Set the three **Source Folder** paths (NB KB, DT KB, Peripheral).
-2. Set an **Output Path** (defaults to `data/output`).
-3. Click **Consolidate Rebate Data** — stages 1–4 run; on completion a FY selection popup appears.
-4. The popup shows per-supplier FY coverage. Select the target FY and click **Generate** — stage 5 runs and writes `rebate raw.xlsx`.
+2. Click **Consolidate Rebate Data** — stages 1–4 run; on completion a FY selection popup appears.
+3. The popup shows per-supplier FY coverage. Select the target FY and click **Generate** — stage 5 runs and writes `rebate raw.xlsx`. Output is saved to `data/output` by default.
 
 ### Generate Form Data (Stage 6)
 
@@ -121,7 +120,6 @@ Settings are stored in `config.json` (project root, git-ignored):
 | `nb_kb` | Path to NB KB source folder |
 | `dt_kb` | Path to DT KB source folder |
 | `peripheral` | Path to Peripheral source folder |
-| `output_path` | Base output path |
 | `last_fy` | Last FY selected (e.g. `FY26`); used to pre-fill the quarter dropdown |
 
 ## Project structure

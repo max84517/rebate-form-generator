@@ -465,7 +465,7 @@ class MainWindow(ctk.CTk):
 
     def _build_ui(self) -> None:
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(4, weight=1)  # log frame expands
+        self.grid_rowconfigure(3, weight=1)  # log frame expands
 
         # Title
         ctk.CTkLabel(
@@ -491,21 +491,9 @@ class MainWindow(ctk.CTk):
         self._add_path_row(src_frame, "DT KB:", self._dt_kb_var, row=2)
         self._add_path_row(src_frame, "Peripheral:", self._peripheral_var, row=3)
 
-        # ── Output ──────────────────────────────────────────────────────
-        out_frame = ctk.CTkFrame(self)
-        out_frame.grid(row=2, column=0, padx=16, pady=4, sticky="ew")
-        out_frame.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(
-            out_frame, text="Output", font=ctk.CTkFont(weight="bold")
-        ).grid(row=0, column=0, columnspan=3, padx=14, pady=(10, 2), sticky="w")
-
-        self._output_var = ctk.StringVar()
-        self._add_path_row(out_frame, "Output Path:", self._output_var, row=1)
-
         # ── Action buttons ──────────────────────────────────────────────
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.grid(row=3, column=0, padx=16, pady=(8, 4))
+        btn_row.grid(row=2, column=0, padx=16, pady=(8, 4))
 
         self._build_btn = ctk.CTkButton(
             btn_row,
@@ -543,7 +531,7 @@ class MainWindow(ctk.CTk):
 
         # ── Log ─────────────────────────────────────────────────────────
         log_frame = ctk.CTkFrame(self)
-        log_frame.grid(row=4, column=0, padx=16, pady=(0, 16), sticky="nsew")
+        log_frame.grid(row=3, column=0, padx=16, pady=(0, 16), sticky="nsew")
         log_frame.grid_columnconfigure(0, weight=1)
         log_frame.grid_rowconfigure(1, weight=1)
 
@@ -583,14 +571,13 @@ class MainWindow(ctk.CTk):
         self._nb_kb_var.set(self._settings.nb_kb)
         self._dt_kb_var.set(self._settings.dt_kb)
         self._peripheral_var.set(self._settings.peripheral)
-        self._output_var.set(self._settings.output_path)
+        self._output_path = Path(self._settings.output_path)
         self._last_fy = self._settings.last_fy or None
 
     def _save_config(self) -> None:
         self._settings.nb_kb = self._nb_kb_var.get()
         self._settings.dt_kb = self._dt_kb_var.get()
         self._settings.peripheral = self._peripheral_var.get()
-        self._settings.output_path = self._output_var.get()
         self._settings.last_fy = self._last_fy or ""
         self._settings.save()
 
@@ -621,7 +608,6 @@ class MainWindow(ctk.CTk):
                 ("NB KB", self._nb_kb_var),
                 ("DT KB", self._dt_kb_var),
                 ("Peripheral", self._peripheral_var),
-                ("Output Path", self._output_var),
             )
             if not var.get().strip()
         ]
@@ -638,7 +624,6 @@ class MainWindow(ctk.CTk):
             "dt_kb": self._dt_kb_var.get(),
             "peripheral": self._peripheral_var.get(),
         }
-        self._output_path = Path(self._output_var.get())
 
         def worker() -> None:
             try:
@@ -679,19 +664,13 @@ class MainWindow(ctk.CTk):
         dialog.focus()
 
     def _on_rebate_form(self) -> None:
-        output_str = self._output_var.get().strip()
-        if not output_str:
-            self._append_log("[ERROR] Please set the Output Path first.")
-            return
-        output_path = Path(output_str)
-        rebate_raw = output_path.parent / "rebate raw" / "rebate raw.xlsx"
+        rebate_raw = self._output_path.parent / "rebate raw" / "rebate raw.xlsx"
         if not rebate_raw.exists():
             self._append_log(
                 "[ERROR] rebate raw.xlsx not found. "
                 "Run 'Consolidate Rebate Data' and select a FY first."
             )
             return
-        self._output_path = output_path
         self._open_quarter_dialog()
 
     def _open_quarter_dialog(self) -> None:
@@ -712,7 +691,6 @@ class MainWindow(ctk.CTk):
                 ("NB KB", self._nb_kb_var),
                 ("DT KB", self._dt_kb_var),
                 ("Peripheral", self._peripheral_var),
-                ("Output Path", self._output_var),
             )
             if not var.get().strip()
         ]
@@ -729,7 +707,6 @@ class MainWindow(ctk.CTk):
             "dt_kb": self._dt_kb_var.get(),
             "peripheral": self._peripheral_var.get(),
         }
-        self._output_path = Path(self._output_var.get())
 
         def open_report() -> None:
             GenerateReportDialog(
@@ -783,19 +760,13 @@ class MainWindow(ctk.CTk):
             self._log("Build completed but no FY sheets found. Check source paths.", "WARNING")
 
     def _on_generate_report(self) -> None:
-        output_str = self._output_var.get().strip()
-        if not output_str:
-            self._append_log("[ERROR] Please set the Output Path first.")
-            return
-        output_path = Path(output_str)
-        rebate_form_input_dir = output_path.parent / "rebate form input"
+        rebate_form_input_dir = self._output_path.parent / "rebate form input"
         if not rebate_form_input_dir.exists():
             self._append_log(
                 "[ERROR] rebate form input folder not found. "
                 "Run 'Generate Form Data' first."
             )
             return
-        self._output_path = output_path
         GenerateReportDialog(
             parent=self,
             output_path=output_path,
