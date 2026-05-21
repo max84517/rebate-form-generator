@@ -31,6 +31,10 @@ if errorlevel 1 (
 echo [4/4] Copying output to dist\...
 xcopy /e /i /y "%BUILD_TEMP%\dist\RebateFormGenerator" "%DIST_OUT%\RebateFormGenerator"
 
+echo [4b] Copying data folders (supplier info + template)...
+xcopy /e /i /y "%PROJECT_DIR%data\supplier info" "%DIST_OUT%\RebateFormGenerator\data\supplier info"
+xcopy /e /i /y "%PROJECT_DIR%data\template" "%DIST_OUT%\RebateFormGenerator\data\template"
+
 echo.
 echo ===== Build complete =====
 echo Executable: %DIST_OUT%\RebateFormGenerator\RebateFormGenerator.exe
