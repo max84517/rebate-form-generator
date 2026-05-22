@@ -59,7 +59,7 @@ def _format_cell(value) -> str:
         return ""
     if isinstance(value, (date, datetime)):
         return value.strftime("%Y-%m-%d")
-    if isinstance(value, float):
+    if isinstance(value, (int, float)):
         return f"${value:,.2f}"
     return str(value)
 
@@ -389,6 +389,7 @@ def generate_report(
             "<Signer>":          _val("Signer"),
             "<Title>":           _val("Title"),
             "<SUPPLIER-Sign>":   _val("SUPPLIER-Sign"),
+            "<Effective Date>":  datetime.now().strftime("%b %Y"),
         }
 
         xlsx_headers, xlsx_data = _read_contract_input(input_xlsx)

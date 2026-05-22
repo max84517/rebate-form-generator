@@ -769,7 +769,7 @@ class MainWindow(ctk.CTk):
             return
         GenerateReportDialog(
             parent=self,
-            output_path=output_path,
+            output_path=self._output_path,
             log_callback=self._log,
         ).focus()
 

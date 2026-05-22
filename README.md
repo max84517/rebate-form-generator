@@ -71,7 +71,19 @@ Each source row produces 1–3 output rows depending on whether the rebate price
 1. Place the Word template (`Rebate Agreement Update Form_*.docx`) in the `template/` folder under your output parent directory.
 2. Place the supplier info Excel (`Contract Source info.xlsx`) in the `supplier info/` folder.
 3. Click **Generate Report**, select the suppliers and enter the Form #, then click **Generate**.
-4. The tool fills keyword placeholders in the template (`<Supplier Name>`, `<Contract Number>`, `<Version>`, `<Name of Entity>`, `<Address>`, `<Signer>`, `<Title>`, `<SUPPLIER-Sign>`), inserts product rebate data into the table, and saves one `.docx` per supplier.
+4. The tool fills keyword placeholders in the template (`<Supplier Name>`, `<Contract Number>`, `<Version>`, `<Name of Entity>`, `<Address>`, `<Signer>`, `<Title>`, `<SUPPLIER-Sign>`, `<Effective Date>`), inserts product rebate data into the table, and saves one `.docx` per supplier.
+
+| Placeholder | Value |
+|-------------|-------|
+| `<Supplier Name>` | From supplier info Excel |
+| `<Contract Number>` | From supplier info Excel |
+| `<Version>` | Form # entered by user |
+| `<Name of Entity>` | From supplier info Excel |
+| `<Address>` | From supplier info Excel |
+| `<Signer>` | From supplier info Excel |
+| `<Title>` | From supplier info Excel |
+| `<SUPPLIER-Sign>` | From supplier info Excel (bold) |
+| `<Effective Date>` | Current month and year, e.g. `May 2026` (auto-filled) |
 
 > **Template note:** The footer's page-number field (`PAGE`) must be a real Word field (not static text). Keyword placeholders in the footer are replaced using run-by-run substitution to preserve the field structure.
 

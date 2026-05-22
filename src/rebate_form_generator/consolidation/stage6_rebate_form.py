@@ -161,7 +161,7 @@ def generate_rebate_form(
             segments.append((price, seg_date))
 
         for price, seg_date in segments:
-            all_rows.append(tuple(feature_vals + [price, seg_date]))
+            all_rows.append(tuple(feature_vals + [float(price) if price is not None else 0.0, seg_date]))
 
     # ── Deduplicate while preserving order ───────────────────────────────
     seen: set[tuple] = set()

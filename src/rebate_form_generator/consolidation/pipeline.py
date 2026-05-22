@@ -136,7 +136,7 @@ def get_available_fy_sheets(
         ("Peripheral", source_data_dir / "Peripheral", None),
     ]:
         log(f"Consolidating {seg} …", "INFO")
-        path = consolidate_segment(seg, raw_dir, output_path, log, sheet_suffix=suffix)
+        path = consolidate_segment(seg, raw_dir, tmp_dir, log, sheet_suffix=suffix)
         if path is not None:
             segment_files.append(path)
 
@@ -144,13 +144,13 @@ def get_available_fy_sheets(
     # Stage 3 — Consolidate all segments
     # ------------------------------------------------------------------
     log("=== Stage 3: Consolidate All Segments ===", "INFO")
-    all_path = consolidate_all(segment_files, output_path, log)
+    all_path = consolidate_all(segment_files, tmp_dir, log)
 
     # ------------------------------------------------------------------
     # Stage 4 — Rebate-only (remove cost columns)
     # ------------------------------------------------------------------
     log("=== Stage 4: Rebate Only ===", "INFO")
-    rebate_path = build_rebate_only(all_path, output_path, log)
+    rebate_path = build_rebate_only(all_path, tmp_dir, log)
 
     # Cache results
     _cache["rebate_path"] = rebate_path
