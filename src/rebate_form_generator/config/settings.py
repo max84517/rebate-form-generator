@@ -15,7 +15,7 @@ class Settings:
         self.nb_kb: str = ""
         self.dt_kb: str = ""
         self.peripheral: str = ""
-        self.output_path: str = str(DEFAULT_OUTPUT)
+        self.output_path: str = str(DEFAULT_OUTPUT)  # always derived from install location
         self.last_fy: str = ""
         self.form_numbers: dict[str, str] = {}
         self._load()
@@ -28,7 +28,8 @@ class Settings:
             self.nb_kb = data.get("nb_kb", "")
             self.dt_kb = data.get("dt_kb", "")
             self.peripheral = data.get("peripheral", "")
-            self.output_path = data.get("output_path", str(DEFAULT_OUTPUT))
+            # output_path is NOT loaded from config — always use DEFAULT_OUTPUT
+            # so moving to a new installation folder never picks up a stale path
             self.last_fy = data.get("last_fy", "")
             self.form_numbers = data.get("form_numbers", {})
         except Exception:
@@ -39,7 +40,6 @@ class Settings:
             "nb_kb": self.nb_kb,
             "dt_kb": self.dt_kb,
             "peripheral": self.peripheral,
-            "output_path": self.output_path,
             "last_fy": self.last_fy,
             "form_numbers": self.form_numbers,
         }
