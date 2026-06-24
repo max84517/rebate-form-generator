@@ -17,6 +17,7 @@ class Settings:
         self.peripheral: str = ""
         self.output_path: str = str(DEFAULT_OUTPUT)
         self.last_fy: str = ""
+        self.form_numbers: dict[str, str] = {}
         self._load()
 
     def _load(self) -> None:
@@ -29,6 +30,7 @@ class Settings:
             self.peripheral = data.get("peripheral", "")
             self.output_path = data.get("output_path", str(DEFAULT_OUTPUT))
             self.last_fy = data.get("last_fy", "")
+            self.form_numbers = data.get("form_numbers", {})
         except Exception:
             pass
 
@@ -39,6 +41,7 @@ class Settings:
             "peripheral": self.peripheral,
             "output_path": self.output_path,
             "last_fy": self.last_fy,
+            "form_numbers": self.form_numbers,
         }
         CONFIG_FILE.write_text(
             json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"

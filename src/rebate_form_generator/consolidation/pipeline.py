@@ -298,21 +298,21 @@ def run_rebate_form_pipeline(
 def run_report_pipeline(
     output_path: Path,
     suppliers: list[str],
-    form_number: str,
+    form_numbers: dict[str, str],
     log: Callable[[str, str], None],
 ) -> list[Path]:
     """Stage 7: generate per-supplier Word contracts.
 
     *suppliers* is the list of supplier names to process.
-    *form_number* is the user-supplied Form# string.
+    *form_numbers* maps supplier name to its Form# string.
     Returns a list of paths to the written .docx files.
     """
     base = output_path.parent
     supplier_info_dir = base / "supplier info"
     template_dir = base / "template"
     rebate_form_input_dir = base / "rebate form input"
-    log(f"=== Stage 7: Generate Report (Form#{form_number}) ===", "INFO")
+    log(f"=== Stage 7: Generate Report ===", "INFO")
     return generate_report(
         supplier_info_dir, template_dir, rebate_form_input_dir,
-        output_path, suppliers, form_number, log,
+        output_path, suppliers, form_numbers, log,
     )

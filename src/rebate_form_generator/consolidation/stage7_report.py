@@ -331,7 +331,7 @@ def generate_report(
     rebate_form_input_dir: Path,
     output_dir: Path,
     suppliers: list[str],
-    form_number: str,
+    form_numbers: dict[str, str],
     log: Callable[[str, str], None],
 ) -> list[Path]:
     """Generate one Word contract per supplier.
@@ -383,7 +383,7 @@ def generate_report(
         replacements = {
             "<Supplier Name>":   _val("Supplier Name"),
             "<Contract Number>": _val("Contract Number"),
-            "<Version>":         form_number,
+            "<Version>":         form_numbers.get(supplier, ""),
             "<Name of Entity>":  _val("Name of Entity"),
             "<Address>":         _val("Address"),
             "<Signer>":          _val("Signer"),
@@ -426,7 +426,7 @@ def generate_report(
         else:
             _fill_product_table(product_table, xlsx_headers, xlsx_data)
 
-        fname = f"Rebate Agreement Update Form#{form_number}_{supplier}.docx"
+        fname = f"Rebate Agreement Update Form#{form_numbers.get(supplier, '')}_{supplier}.docx"
         out_path = out_dir / fname
         doc.save(out_path)
         log(f"  [{supplier}] Saved → {fname}", "INFO")

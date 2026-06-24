@@ -307,13 +307,15 @@ class QuarterSelectionDialog(ctk.CTkToplevel):
 
 
 class GenerateReportDialog(ctk.CTkToplevel):
-    """Pop-up for selecting suppliers and Form# to generate Word contracts."""
+    """Pop-up for selecting suppliers and per-supplier Form# to generate Word contracts."""
 
     def __init__(
         self,
         parent: ctk.CTk,
         output_path: Path,
         log_callback,
+        form_numbers: dict | None = None,
+        save_form_numbers=None,
     ) -> None:
         super().__init__(parent)
         self.title("Generate Report")
@@ -322,6 +324,8 @@ class GenerateReportDialog(ctk.CTkToplevel):
 
         self._output_path = output_path
         self._log_callback = log_callback
+        self._save_form_numbers = save_form_numbers
+        self._last_form_numbers: dict[str, str] = form_numbers or {}
 
         rebate_form_input_dir = output_path.parent / "rebate form input"
         self._suppliers = self._detect_suppliers(rebate_form_input_dir)
@@ -330,16 +334,32 @@ class GenerateReportDialog(ctk.CTkToplevel):
 
         # ── Title ─────────────────────────────────────────────────────
         ctk.CTkLabel(
-            self, text="Select Suppliers",
+            self, text="Select Suppliers & Enter Form #",
             font=ctk.CTkFont(size=14, weight="bold"),
         ).grid(row=0, column=0, padx=24, pady=(20, 4))
 
-        # ── Supplier checkboxes (scrollable) ──────────────────────────
-        scroll = ctk.CTkScrollableFrame(self, height=min(180, max(60, len(self._suppliers) * 32)))
-        scroll.grid(row=1, column=0, padx=16, pady=(4, 8), sticky="ew")
+        # ── Column headers ────────────────────────────────────────────
+        hdr_frame = ctk.CTkFrame(self, fg_color="transparent")
+        hdr_frame.grid(row=1, column=0, padx=20, pady=(0, 2), sticky="ew")
+        hdr_frame.grid_columnconfigure(0, weight=1)
+        hdr_frame.grid_columnconfigure(1, minsize=120)
+        ctk.CTkLabel(hdr_frame, text="Supplier", font=ctk.CTkFont(weight="bold"), anchor="w").grid(
+            row=0, column=0, padx=(28, 4), sticky="w")
+        ctk.CTkLabel(hdr_frame, text="Form #", font=ctk.CTkFont(weight="bold"), anchor="w").grid(
+            row=0, column=1, padx=(0, 8), sticky="w")
+
+        # ── Supplier rows (scrollable) ────────────────────────────────
+        row_height = 38
+        scroll = ctk.CTkScrollableFrame(
+            self, height=min(220, max(60, len(self._suppliers) * row_height))
+        )
+        scroll.grid(row=2, column=0, padx=16, pady=(0, 8), sticky="ew")
         scroll.grid_columnconfigure(0, weight=1)
+        scroll.grid_columnconfigure(1, minsize=120)
 
         self._supplier_vars: dict[str, BooleanVar] = {}
+        self._form_entries: dict[str, ctk.CTkEntry] = {}
+
         if self._suppliers:
             for i, supplier in enumerate(self._suppliers):
                 var = BooleanVar(value=True)
@@ -348,26 +368,18 @@ class GenerateReportDialog(ctk.CTkToplevel):
                     scroll, text=supplier, variable=var,
                     checkbox_width=18, checkbox_height=18,
                     font=ctk.CTkFont(size=12),
-                ).grid(row=i, column=0, padx=10, pady=2, sticky="w")
+                ).grid(row=i, column=0, padx=(10, 4), pady=3, sticky="w")
+                entry = ctk.CTkEntry(scroll, width=110, placeholder_text="Form #")
+                last = self._last_form_numbers.get(supplier, "")
+                if last:
+                    entry.insert(0, last)
+                entry.grid(row=i, column=1, padx=(0, 8), pady=3, sticky="ew")
+                self._form_entries[supplier] = entry
         else:
             ctk.CTkLabel(
                 scroll, text="No contract input files found.",
                 text_color="gray",
             ).grid(row=0, column=0, padx=10, pady=8)
-
-        # ── Form# input ───────────────────────────────────────────────
-        form_frame = ctk.CTkFrame(self, fg_color="transparent")
-        form_frame.grid(row=2, column=0, padx=16, pady=(4, 4), sticky="ew")
-        form_frame.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(
-            form_frame, text="Form #", width=70, anchor="e",
-            font=ctk.CTkFont(weight="bold"),
-        ).grid(row=0, column=0, padx=(8, 6), pady=6)
-        self._form_entry = ctk.CTkEntry(
-            form_frame, placeholder_text="Enter form number…", width=200,
-        )
-        self._form_entry.grid(row=0, column=1, padx=(0, 8), pady=6, sticky="ew")
 
         self._error_label = ctk.CTkLabel(
             self, text="", text_color="#e05555", font=ctk.CTkFont(size=11),
@@ -386,7 +398,7 @@ class GenerateReportDialog(ctk.CTkToplevel):
             fg_color="transparent", border_width=1, command=self.destroy,
         ).pack(side="left")
 
-        W, H = 420, 420
+        W, H = 520, 460
         self.update_idletasks()
         px, py = parent.winfo_x(), parent.winfo_y()
         pw, ph = parent.winfo_width(), parent.winfo_height()
@@ -409,15 +421,30 @@ class GenerateReportDialog(ctk.CTkToplevel):
         ]
 
     def _on_generate(self) -> None:
-        form_num = self._form_entry.get().strip()
         selected = [s for s, var in self._supplier_vars.items() if var.get()]
-
-        if not form_num:
-            self._error_label.configure(text="Form # is required.")
-            return
         if not selected:
             self._error_label.configure(text="Select at least one supplier.")
             return
+
+        # Collect per-supplier form numbers; require all selected to have one
+        form_numbers: dict[str, str] = {}
+        missing_form: list[str] = []
+        for supplier in selected:
+            num = self._form_entries[supplier].get().strip()
+            if not num:
+                missing_form.append(supplier)
+            else:
+                form_numbers[supplier] = num
+
+        if missing_form:
+            self._error_label.configure(
+                text=f"Form # required for: {', '.join(missing_form)}"
+            )
+            return
+
+        # Save form numbers to config before closing
+        if self._save_form_numbers:
+            self._save_form_numbers(form_numbers)
 
         output_path = self._output_path
         log = self._log_callback
@@ -425,7 +452,7 @@ class GenerateReportDialog(ctk.CTkToplevel):
 
         def worker() -> None:
             try:
-                result = run_report_pipeline(output_path, selected, form_num, log)
+                result = run_report_pipeline(output_path, selected, form_numbers, log)
                 if result:
                     log(
                         f"=== Report saved: {len(result)} file(s) "
@@ -713,6 +740,8 @@ class MainWindow(ctk.CTk):
                 parent=self,
                 output_path=self._output_path,
                 log_callback=self._log,
+                form_numbers=self._settings.form_numbers,
+                save_form_numbers=self._save_form_numbers,
             ).focus()
 
         def open_form() -> None:
@@ -771,7 +800,13 @@ class MainWindow(ctk.CTk):
             parent=self,
             output_path=self._output_path,
             log_callback=self._log,
+            form_numbers=self._settings.form_numbers,
+            save_form_numbers=self._save_form_numbers,
         ).focus()
+
+    def _save_form_numbers(self, form_numbers: dict[str, str]) -> None:
+        self._settings.form_numbers.update(form_numbers)
+        self._settings.save()
 
     # ------------------------------------------------------------------
     # UI state helpers
