@@ -189,34 +189,13 @@ def generate_rebate_form(
     output_dir.mkdir(parents=True, exist_ok=True)
     out_paths: list[Path] = []
     for supplier, rows in sorted(supplier_rows.items()):
-        # Drop columns where every row has the exact same value
-        keep_indices: list[int] = []
-        for col_idx in range(len(out_headers)):
-            values = {row_tuple[col_idx] for row_tuple in rows}
-            if len(values) > 1:
-                keep_indices.append(col_idx)
-        dropped_cols = len(out_headers) - len(keep_indices)
-        if dropped_cols:
-            dropped_names = [out_headers[i] for i in range(len(out_headers)) if i not in keep_indices]
-            log(f"  [{supplier}] Dropped {dropped_cols} constant column(s): {dropped_names}", "INFO")
-
-        filtered_headers = [out_headers[i] for i in keep_indices]
-        filtered_rows = [tuple(row_tuple[i] for i in keep_indices) for row_tuple in rows]
-        # Recalculate price column index after filtering
-        price_header = "Per-Unit Rebate Amount $USD"
-        filtered_price_col = (
-            filtered_headers.index(price_header) + 1
-            if price_header in filtered_headers else None
-        )
-
         wb_out = Workbook()
         ws_out = wb_out.active
         ws_out.title = "Input"
-        ws_out.append(filtered_headers)
-        for i, row_tuple in enumerate(filtered_rows, start=2):
+        ws_out.append(out_headers)
+        for i, row_tuple in enumerate(rows, start=2):
             ws_out.append(list(row_tuple))
-            if filtered_price_col:
-                ws_out.cell(row=i, column=filtered_price_col).number_format = '"$"#,##0.00'
+            ws_out.cell(row=i, column=price_col).number_format = '"$"#,##0.00'
         out_path = output_dir / f"contract input - {supplier}.xlsx"
         wb_out.save(out_path)
         log(f"  Saved {len(rows)} rows → {out_path.name}", "INFO")
