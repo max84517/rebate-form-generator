@@ -17,6 +17,7 @@ class Settings:
         self.peripheral: str = ""
         self.output_path: str = str(DEFAULT_OUTPUT)  # always derived from install location
         self.last_fy: str = ""
+        self.last_quarter: int = 0
         self.form_numbers: dict[str, str] = {}
         self._load()
 
@@ -31,6 +32,7 @@ class Settings:
             # output_path is NOT loaded from config — always use DEFAULT_OUTPUT
             # so moving to a new installation folder never picks up a stale path
             self.last_fy = data.get("last_fy", "")
+            self.last_quarter = int(data.get("last_quarter", 0))
             self.form_numbers = data.get("form_numbers", {})
         except Exception:
             pass
@@ -41,6 +43,7 @@ class Settings:
             "dt_kb": self.dt_kb,
             "peripheral": self.peripheral,
             "last_fy": self.last_fy,
+            "last_quarter": self.last_quarter,
             "form_numbers": self.form_numbers,
         }
         CONFIG_FILE.write_text(

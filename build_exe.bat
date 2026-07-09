@@ -32,6 +32,8 @@ echo [4/4] Copying output to dist\...
 xcopy /e /i /y "%BUILD_TEMP%\dist\RebateFormGenerator" "%DIST_OUT%\RebateFormGenerator"
 
 echo [4b] Copying data folders (supplier info + template)...
+xcopy /e /i /y "%PROJECT_DIR%data\supplier info" "%BUILD_TEMP%\dist\RebateFormGenerator\data\supplier info"
+xcopy /e /i /y "%PROJECT_DIR%data\template" "%BUILD_TEMP%\dist\RebateFormGenerator\data\template"
 xcopy /e /i /y "%PROJECT_DIR%data\supplier info" "%DIST_OUT%\RebateFormGenerator\data\supplier info"
 xcopy /e /i /y "%PROJECT_DIR%data\template" "%DIST_OUT%\RebateFormGenerator\data\template"
 

@@ -325,6 +325,28 @@ def _fill_product_table(table, xlsx_headers: list[str], data_rows: list[list]) -
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def _effective_date_from_fy_quarter(fy_2digit: int, quarter: int) -> str:
+    """Return the first month label of the given HP FY quarter.
+
+    Quarter mapping (HP fiscal year):
+      Q1: Nov(fy-1), Dec(fy-1), Jan(fy)  → first month = Nov (fy-1)
+      Q2: Feb, Mar, Apr                  → first month = Feb (fy)
+      Q3: May, Jun, Jul                  → first month = May (fy)
+      Q4: Aug, Sep, Oct                  → first month = Aug (fy)
+    """
+    full_year = 2000 + fy_2digit
+    if quarter == 1:
+        month, year = 11, full_year - 1
+    elif quarter == 2:
+        month, year = 2, full_year
+    elif quarter == 3:
+        month, year = 5, full_year
+    else:  # Q4
+        month, year = 8, full_year
+    from datetime import datetime as _dt
+    return _dt(year, month, 1).strftime("%b %Y")
+
+
 def generate_report(
     supplier_info_dir: Path,
     template_dir: Path,
@@ -333,6 +355,8 @@ def generate_report(
     suppliers: list[str],
     form_numbers: dict[str, str],
     log: Callable[[str, str], None],
+    fy: int | None = None,
+    quarter: int | None = None,
 ) -> list[Path]:
     """Generate one Word contract per supplier.
 
@@ -389,7 +413,11 @@ def generate_report(
             "<Signer>":          _val("Signer"),
             "<Title>":           _val("Title"),
             "<SUPPLIER-Sign>":   _val("SUPPLIER-Sign"),
-            "<Effective Date>":  datetime.now().strftime("%b %Y"),
+            "<Effective Date>":  (
+                _effective_date_from_fy_quarter(fy, quarter)
+                if fy is not None and quarter is not None
+                else datetime.now().strftime("%b %Y")
+            ),
         }
 
         xlsx_headers, xlsx_data = _read_contract_input(input_xlsx)

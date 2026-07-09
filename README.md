@@ -47,7 +47,7 @@ poetry run rebate-form-generator
    - Choose which **feature columns** to include (7 pre-selected by default)
 3. Click **Generate** — outputs `rebate form input/contract input - <Supplier>.xlsx` per supplier.
 
-The selected FY is remembered in `config.json` so the quarter dropdown shows only that FY's four quarters on the next launch.
+The selected FY + Quarter is remembered in `config.json`, so the next time you open **Generate Form Data** the dropdown defaults to the same FY's current quarter automatically.
 
 #### Quarter rules
 
@@ -70,20 +70,21 @@ Each source row produces 1–3 output rows depending on whether the rebate price
 
 1. Place the Word template (`Rebate Agreement Update Form_*.docx`) in the `template/` folder under your output parent directory.
 2. Place the supplier info Excel (`Contract Source info.xlsx`) in the `supplier info/` folder.
-3. Click **Generate Report**, select the suppliers and enter the Form #, then click **Generate**.
+3. Click **Generate Report**, select the suppliers and enter the Form # for each, then click **Generate**.
+   - Form numbers are saved to `config.json` and pre-filled automatically on the next launch.
 4. The tool fills keyword placeholders in the template (`<Supplier Name>`, `<Contract Number>`, `<Version>`, `<Name of Entity>`, `<Address>`, `<Signer>`, `<Title>`, `<SUPPLIER-Sign>`, `<Effective Date>`), inserts product rebate data into the table, and saves one `.docx` per supplier.
 
 | Placeholder | Value |
 |-------------|-------|
 | `<Supplier Name>` | From supplier info Excel |
 | `<Contract Number>` | From supplier info Excel |
-| `<Version>` | Form # entered by user |
+| `<Version>` | Form # entered by user (saved per-supplier in `config.json`) |
 | `<Name of Entity>` | From supplier info Excel |
 | `<Address>` | From supplier info Excel |
 | `<Signer>` | From supplier info Excel |
 | `<Title>` | From supplier info Excel |
 | `<SUPPLIER-Sign>` | From supplier info Excel (bold) |
-| `<Effective Date>` | Current month and year, e.g. `May 2026` (auto-filled) |
+| `<Effective Date>` | First month of the selected quarter, e.g. FY26 Q3 → `May 2026` (auto-filled) |
 
 > **Template note:** The footer's page-number field (`PAGE`) must be a real Word field (not static text). Keyword placeholders in the footer are replaced using run-by-run substitution to preserve the field structure.
 
@@ -132,7 +133,9 @@ Settings are stored in `config.json` (project root, git-ignored):
 | `nb_kb` | Path to NB KB source folder |
 | `dt_kb` | Path to DT KB source folder |
 | `peripheral` | Path to Peripheral source folder |
-| `last_fy` | Last FY selected (e.g. `FY26`); used to pre-fill the quarter dropdown |
+| `last_fy` | Last FY selected (e.g. `FY26`) |
+| `last_quarter` | Last quarter selected (1–4); used to compute `<Effective Date>` in Stage 7 |
+| `form_numbers` | Per-supplier Form # map (e.g. `{"CHICONY": "9"}`) |
 
 ## Project structure
 

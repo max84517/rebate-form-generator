@@ -184,6 +184,7 @@ class QuarterSelectionDialog(ctk.CTkToplevel):
         log_callback,
         last_fy: str | None = None,
         on_pipeline_done=None,
+        on_quarter_confirmed=None,
     ) -> None:
         super().__init__(parent)
         self.title("Generate Form Data")
@@ -194,6 +195,7 @@ class QuarterSelectionDialog(ctk.CTkToplevel):
         self._log_callback = log_callback
         self._last_fy = last_fy
         self._on_pipeline_done = on_pipeline_done
+        self._on_quarter_confirmed = on_quarter_confirmed
 
         self.grid_columnconfigure(0, weight=1)
 
@@ -252,24 +254,12 @@ class QuarterSelectionDialog(ctk.CTkToplevel):
         self.after(100, lambda: self.attributes("-topmost", False))
 
     def _make_options(self) -> list[str]:
-        if self._last_fy:
-            fy_label = self._last_fy.upper()  # e.g. "FY26"
-            return [f"{fy_label} Q{q}" for q in range(1, 5)]
         fy, _ = current_fy_quarter()
-        options = []
-        for fy_off in range(-2, 2):
-            fy_val = (fy + fy_off) % 100
-            for q in range(1, 5):
-                options.append(f"FY{fy_val:02d} Q{q}")
-        return options
+        fy_label = f"FY{fy % 100:02d}"
+        return [f"{fy_label} Q{q}" for q in range(1, 5)]
 
     def _default_option(self) -> str:
         cur_fy, cur_q = current_fy_quarter()
-        if self._last_fy:
-            fy_num = int(self._last_fy.upper().lstrip("FY"))
-            if fy_num == cur_fy % 100:
-                return f"{self._last_fy.upper()} Q{cur_q}"
-            return f"{self._last_fy.upper()} Q1"
         return f"FY{cur_fy % 100:02d} Q{cur_q}"
 
     def _on_generate(self) -> None:
@@ -284,6 +274,9 @@ class QuarterSelectionDialog(ctk.CTkToplevel):
         parts = label.split()
         fy = int(parts[0][2:])
         q = int(parts[1][1:])
+
+        if self._on_quarter_confirmed:
+            self._on_quarter_confirmed(fy, q)
 
         def worker() -> None:
             try:
@@ -316,6 +309,8 @@ class GenerateReportDialog(ctk.CTkToplevel):
         log_callback,
         form_numbers: dict | None = None,
         save_form_numbers=None,
+        fy: int | None = None,
+        quarter: int | None = None,
     ) -> None:
         super().__init__(parent)
         self.title("Generate Report")
@@ -326,6 +321,8 @@ class GenerateReportDialog(ctk.CTkToplevel):
         self._log_callback = log_callback
         self._save_form_numbers = save_form_numbers
         self._last_form_numbers: dict[str, str] = form_numbers or {}
+        self._fy = fy
+        self._quarter = quarter
 
         rebate_form_input_dir = output_path.parent / "rebate form input"
         self._suppliers = self._detect_suppliers(rebate_form_input_dir)
@@ -452,7 +449,7 @@ class GenerateReportDialog(ctk.CTkToplevel):
 
         def worker() -> None:
             try:
-                result = run_report_pipeline(output_path, selected, form_numbers, log)
+                result = run_report_pipeline(output_path, selected, form_numbers, log, self._fy, self._quarter)
                 if result:
                     log(
                         f"=== Report saved: {len(result)} file(s) "
@@ -481,6 +478,7 @@ class MainWindow(ctk.CTk):
         self._output_path: Path | None = None
         self._is_running = False
         self._last_fy: str | None = None
+        self._last_quarter: int = 0
 
         self._build_ui()
         self._load_config()
@@ -600,12 +598,14 @@ class MainWindow(ctk.CTk):
         self._peripheral_var.set(self._settings.peripheral)
         self._output_path = Path(self._settings.output_path)
         self._last_fy = self._settings.last_fy or None
+        self._last_quarter = self._settings.last_quarter
 
     def _save_config(self) -> None:
         self._settings.nb_kb = self._nb_kb_var.get()
         self._settings.dt_kb = self._dt_kb_var.get()
         self._settings.peripheral = self._peripheral_var.get()
         self._settings.last_fy = self._last_fy or ""
+        self._settings.last_quarter = self._last_quarter
         self._settings.save()
 
     # ------------------------------------------------------------------
@@ -678,6 +678,14 @@ class MainWindow(ctk.CTk):
         self._settings.last_fy = fy
         self._settings.save()
 
+    def _on_quarter_confirmed(self, fy_int: int, quarter: int) -> None:
+        fy_label = f"FY{fy_int:02d}"
+        self._last_fy = fy_label
+        self._last_quarter = quarter
+        self._settings.last_fy = fy_label
+        self._settings.last_quarter = quarter
+        self._settings.save()
+
     def _open_fy_dialog(self, fy_sheets: list[str], coverage: dict) -> None:
         dialog = FySelectionDialog(
             parent=self,
@@ -706,6 +714,7 @@ class MainWindow(ctk.CTk):
             output_path=self._output_path,
             log_callback=self._log,
             last_fy=self._last_fy,
+            on_quarter_confirmed=self._on_quarter_confirmed,
         )
         dialog.focus()
 
@@ -736,12 +745,15 @@ class MainWindow(ctk.CTk):
         }
 
         def open_report() -> None:
+            fy_int = int(self._last_fy.upper().lstrip("FY")) if self._last_fy else None
             GenerateReportDialog(
                 parent=self,
                 output_path=self._output_path,
                 log_callback=self._log,
                 form_numbers=self._settings.form_numbers,
                 save_form_numbers=self._save_form_numbers,
+                fy=fy_int,
+                quarter=self._last_quarter or None,
             ).focus()
 
         def open_form() -> None:
@@ -751,6 +763,7 @@ class MainWindow(ctk.CTk):
                 log_callback=self._log,
                 last_fy=self._last_fy,
                 on_pipeline_done=open_report,
+                on_quarter_confirmed=self._on_quarter_confirmed,
             ).focus()
 
         def worker() -> None:
@@ -796,12 +809,15 @@ class MainWindow(ctk.CTk):
                 "Run 'Generate Form Data' first."
             )
             return
+        fy_int = int(self._last_fy.upper().lstrip("FY")) if self._last_fy else None
         GenerateReportDialog(
             parent=self,
             output_path=self._output_path,
             log_callback=self._log,
             form_numbers=self._settings.form_numbers,
             save_form_numbers=self._save_form_numbers,
+            fy=fy_int,
+            quarter=self._last_quarter or None,
         ).focus()
 
     def _save_form_numbers(self, form_numbers: dict[str, str]) -> None:

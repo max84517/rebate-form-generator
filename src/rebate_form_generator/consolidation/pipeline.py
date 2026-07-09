@@ -300,11 +300,14 @@ def run_report_pipeline(
     suppliers: list[str],
     form_numbers: dict[str, str],
     log: Callable[[str, str], None],
+    fy: int | None = None,
+    quarter: int | None = None,
 ) -> list[Path]:
     """Stage 7: generate per-supplier Word contracts.
 
     *suppliers* is the list of supplier names to process.
     *form_numbers* maps supplier name to its Form# string.
+    *fy* and *quarter* determine the Effective Date (first month of the quarter).
     Returns a list of paths to the written .docx files.
     """
     base = output_path.parent
@@ -314,5 +317,5 @@ def run_report_pipeline(
     log(f"=== Stage 7: Generate Report ===", "INFO")
     return generate_report(
         supplier_info_dir, template_dir, rebate_form_input_dir,
-        output_path, suppliers, form_numbers, log,
+        output_path, suppliers, form_numbers, log, fy, quarter,
     )
