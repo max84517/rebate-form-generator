@@ -33,7 +33,7 @@ _OPTIONAL_COLUMNS: list[str] = [
     "Product Type", "Color", "ODM (Regional Site)", "IncoTerm",
 ]
 _DEFAULT_CHECKED: frozenset[str] = frozenset([
-    "Segment", "Category", "HP/ODM Part#", "Platforms/Project",
+    "Segment", "Color", "HP/ODM Part#", "Platforms/Project",
     "Product", "Size", "ODM (Regional Site)",
 ])
 

@@ -64,7 +64,11 @@ Example: **FY26 Q1** covers Nov 2025, Dec 2025, Jan 2026.
 
 Selected feature columns + **GTK Suppliers** (always included) + **Per-Unit Rebate Amount $USD** (currency-formatted) + **Rebate Period Start Date**
 
-Each source row produces 1–3 output rows depending on whether the rebate price changes month-to-month within the quarter. Duplicate rows are dropped automatically.
+Default checked columns: `Segment`, `Color`, `HP/ODM Part#`, `Platforms/Project`, `Product`, `Size`, `ODM (Regional Site)`
+
+Each source row produces 1–3 output rows depending on whether the rebate price changes month-to-month within the quarter. Prices are rounded to 2 decimal places before deduplication. Duplicate rows are dropped automatically.
+
+> **Note:** Columns where every row contains the same value are automatically removed from each supplier’s output file.
 
 ### Generate Report (Stage 7)
 
@@ -87,6 +91,15 @@ Each source row produces 1–3 output rows depending on whether the rebate price
 | `<Effective Date>` | First month of the selected quarter, e.g. FY26 Q3 → `May 2026` (auto-filled) |
 
 > **Template note:** The footer's page-number field (`PAGE`) must be a real Word field (not static text). Keyword placeholders in the footer are replaced using run-by-run substitution to preserve the field structure.
+
+#### Product table formatting
+
+| Column | Format |
+|--------|--------|
+| `Size` | Integer string, e.g. `14` (not `14.00`) |
+| `Per-Unit Rebate Amount $USD` | Currency with `$`, e.g. `$0.40` |
+| Date columns | `YYYY-MM-DD` |
+| Other numbers | `1,234.56` |
 
 ### Run All
 

@@ -53,14 +53,20 @@ def _str(value) -> str:
     return "" if value is None else str(value).strip()
 
 
-def _format_cell(value) -> str:
+def _format_cell(value, header: str = "") -> str:
     """Format a cell value for display in the Word table."""
     if value is None:
         return ""
     if isinstance(value, (date, datetime)):
         return value.strftime("%Y-%m-%d")
     if isinstance(value, (int, float)):
-        return f"${value:,.2f}"
+        h = header.lower()
+        if "rebate amount" in h or "usd" in h:
+            return f"${value:,.2f}"
+        if "size" in h:
+            # Show as integer if value is a whole number
+            return str(int(value)) if value == int(value) else str(value)
+        return f"{value:,.2f}"
     return str(value)
 
 
@@ -264,11 +270,12 @@ def _find_product_table(doc: Document):
     return None
 
 
-def _fill_row_cells(row, col_map: list[int | None], data_row: list) -> None:
+def _fill_row_cells(row, col_map: list[int | None], data_row: list, xlsx_headers: list[str] | None = None) -> None:
     """Write data values into a table row's cells (Times New Roman 8pt)."""
     for col_idx, cell in enumerate(row.cells):
         data_idx = col_map[col_idx] if col_idx < len(col_map) else None
-        text = _format_cell(data_row[data_idx]) if (
+        header = (xlsx_headers[data_idx] if xlsx_headers and data_idx is not None and data_idx < len(xlsx_headers) else "")
+        text = _format_cell(data_row[data_idx], header) if (
             data_idx is not None and data_idx < len(data_row)
         ) else ""
         para = cell.paragraphs[0]
@@ -313,7 +320,7 @@ def _fill_product_table(table, xlsx_headers: list[str], data_rows: list[list]) -
     first_keyword_tr = keyword_trs[0] if keyword_trs else None
     for data_row in data_rows:
         new_row = table.add_row()          # appended at end by python-docx
-        _fill_row_cells(new_row, col_map, data_row)
+        _fill_row_cells(new_row, col_map, data_row, xlsx_headers)
         if first_keyword_tr is not None:
             new_tr = new_row._tr
             tbl_elem.remove(new_tr)
