@@ -373,7 +373,7 @@ def generate_report(
     info_xlsx = _get_latest_file(supplier_info_dir, ".xlsx")
     if info_xlsx is None:
         log(f"No Excel found in supplier info folder: {supplier_info_dir}", "ERROR")
-        return []
+        return [], {}
     log(f"  Supplier info: {info_xlsx.name}", "INFO")
     supplier_info = _read_supplier_info(info_xlsx)
 
@@ -381,7 +381,7 @@ def generate_report(
     template_docx = _get_latest_file(template_dir, ".docx")
     if template_docx is None:
         log(f"No Word template found in: {template_dir}", "ERROR")
-        return []
+        return [], {}
     log(f"  Template: {template_docx.name}", "INFO")
 
     # ── Output folder: <output_dir>/<YYYYMMDD>/ ───────────────────────
@@ -390,6 +390,7 @@ def generate_report(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     out_paths: list[Path] = []
+    blanks: dict[str, list[str]] = {}
 
     for supplier in suppliers:
         input_xlsx = rebate_form_input_dir / f"contract input - {supplier}.xlsx"
@@ -429,6 +430,18 @@ def generate_report(
 
         xlsx_headers, xlsx_data = _read_contract_input(input_xlsx)
 
+        # ── Detect blank cells in data columns ────────────────────────────────
+        blank_cols: list[str] = []
+        for col_idx, col_name in enumerate(xlsx_headers):
+            if any(
+                col_idx >= len(row) or row[col_idx] is None or str(row[col_idx]).strip() == ""
+                for row in xlsx_data
+            ):
+                blank_cols.append(col_name)
+        if blank_cols:
+            blanks[supplier] = blank_cols
+            log(f"  [{supplier}] Blank fields: {blank_cols}", "WARNING")
+
         doc = Document(template_docx)
 
         # ── Diagnostics: verify Excel column mapping and Word keyword detection ──
@@ -467,4 +480,4 @@ def generate_report(
         log(f"  [{supplier}] Saved → {fname}", "INFO")
         out_paths.append(out_path)
 
-    return out_paths
+    return out_paths, blanks

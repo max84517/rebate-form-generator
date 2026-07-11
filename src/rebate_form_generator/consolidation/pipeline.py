@@ -302,13 +302,11 @@ def run_report_pipeline(
     log: Callable[[str, str], None],
     fy: int | None = None,
     quarter: int | None = None,
-) -> list[Path]:
+) -> tuple[list[Path], dict[str, list[str]]]:
     """Stage 7: generate per-supplier Word contracts.
 
-    *suppliers* is the list of supplier names to process.
-    *form_numbers* maps supplier name to its Form# string.
-    *fy* and *quarter* determine the Effective Date (first month of the quarter).
-    Returns a list of paths to the written .docx files.
+    Returns ``(out_paths, blanks)`` where *blanks* maps supplier name to a
+    list of column names that contain at least one blank cell.
     """
     base = output_path.parent
     supplier_info_dir = base / "supplier info"

@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "rebate-form-generator"
-version = "1.0.8"
+version = "1.0.9"
 description = "Rebate contract pricing template generator"
 authors = []
 packages = [{include = "rebate_form_generator", from = "src"}]

@@ -299,6 +299,51 @@ class QuarterSelectionDialog(ctk.CTkToplevel):
         threading.Thread(target=worker, daemon=True).start()
 
 
+def _show_blank_warning(parent, blanks: dict[str, list[str]]) -> None:
+    """Show a popup listing suppliers that have blank fields in their contract input."""
+    win = ctk.CTkToplevel(parent)
+    win.title("⚠ Blank Fields Detected")
+    win.resizable(False, False)
+    win.grab_set()
+
+    ctk.CTkLabel(
+        win,
+        text="The following suppliers have blank fields in their contract input:",
+        font=ctk.CTkFont(size=13, weight="bold"),
+        wraplength=460,
+    ).pack(padx=24, pady=(18, 8))
+
+    scroll = ctk.CTkScrollableFrame(win, width=460, height=min(300, len(blanks) * 60 + 20))
+    scroll.pack(padx=16, pady=(0, 8), fill="both")
+
+    for supplier, cols in sorted(blanks.items()):
+        ctk.CTkLabel(
+            scroll,
+            text=f"• {supplier}:",
+            font=ctk.CTkFont(weight="bold"),
+            anchor="w",
+        ).pack(anchor="w", padx=8, pady=(6, 0))
+        ctk.CTkLabel(
+            scroll,
+            text="  " + ", ".join(cols),
+            font=ctk.CTkFont(size=12),
+            text_color="gray",
+            anchor="w",
+            wraplength=430,
+        ).pack(anchor="w", padx=8, pady=(0, 2))
+
+    ctk.CTkButton(win, text="OK", width=80, command=win.destroy).pack(pady=(4, 16))
+
+    win.update_idletasks()
+    W, H = win.winfo_reqwidth(), win.winfo_reqheight()
+    px, py = parent.winfo_x(), parent.winfo_y()
+    pw, ph = parent.winfo_width(), parent.winfo_height()
+    win.geometry(f"{W}x{H}+{px + (pw - W) // 2}+{py + (ph - H) // 2}")
+    win.attributes("-topmost", True)
+    win.lift()
+    win.after(100, lambda: win.attributes("-topmost", False))
+
+
 class GenerateReportDialog(ctk.CTkToplevel):
     """Pop-up for selecting suppliers and per-supplier Form# to generate Word contracts."""
 
@@ -445,19 +490,22 @@ class GenerateReportDialog(ctk.CTkToplevel):
 
         output_path = self._output_path
         log = self._log_callback
+        parent = self.master
         self.destroy()
 
         def worker() -> None:
             try:
-                result = run_report_pipeline(output_path, selected, form_numbers, log, self._fy, self._quarter)
-                if result:
+                out_paths, blanks = run_report_pipeline(output_path, selected, form_numbers, log, self._fy, self._quarter)
+                if out_paths:
                     log(
-                        f"=== Report saved: {len(result)} file(s) "
-                        f"\u2192 {result[0].parent} ===",
+                        f"=== Report saved: {len(out_paths)} file(s) "
+                        f"\u2192 {out_paths[0].parent} ===",
                         "INFO",
                     )
                 else:
                     log("Failed to generate report. See log for details.", "ERROR")
+                if blanks:
+                    parent.after(0, lambda b=blanks: _show_blank_warning(parent, b))
             except Exception as exc:
                 log(f"Error: {exc}", "ERROR")
                 log(traceback.format_exc(), "ERROR")
