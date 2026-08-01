@@ -19,6 +19,7 @@ class Settings:
         self.last_fy: str = ""
         self.last_quarter: int = 0
         self.form_numbers: dict[str, str] = {}
+        self.icertis_codes: dict[str, str] = {}
         self._load()
 
     def _load(self) -> None:
@@ -34,6 +35,7 @@ class Settings:
             self.last_fy = data.get("last_fy", "")
             self.last_quarter = int(data.get("last_quarter", 0))
             self.form_numbers = data.get("form_numbers", {})
+            self.icertis_codes = data.get("icertis_codes", {})
         except Exception:
             pass
 
@@ -45,6 +47,7 @@ class Settings:
             "last_fy": self.last_fy,
             "last_quarter": self.last_quarter,
             "form_numbers": self.form_numbers,
+            "icertis_codes": self.icertis_codes,
         }
         CONFIG_FILE.write_text(
             json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"

@@ -302,6 +302,7 @@ def run_report_pipeline(
     log: Callable[[str, str], None],
     fy: int | None = None,
     quarter: int | None = None,
+    icertis_codes: dict[str, str] | None = None,
 ) -> tuple[list[Path], dict[str, list[str]]]:
     """Stage 7: generate per-supplier Word contracts.
 
@@ -315,5 +316,5 @@ def run_report_pipeline(
     log(f"=== Stage 7: Generate Report ===", "INFO")
     return generate_report(
         supplier_info_dir, template_dir, rebate_form_input_dir,
-        output_path, suppliers, form_numbers, log, fy, quarter,
+        output_path, suppliers, form_numbers, log, fy, quarter, icertis_codes,
     )

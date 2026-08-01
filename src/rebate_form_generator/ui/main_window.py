@@ -356,6 +356,8 @@ class GenerateReportDialog(ctk.CTkToplevel):
         save_form_numbers=None,
         fy: int | None = None,
         quarter: int | None = None,
+        icertis_codes: dict | None = None,
+        save_icertis_codes=None,
     ) -> None:
         super().__init__(parent)
         self.title("Generate Report")
@@ -365,7 +367,9 @@ class GenerateReportDialog(ctk.CTkToplevel):
         self._output_path = output_path
         self._log_callback = log_callback
         self._save_form_numbers = save_form_numbers
+        self._save_icertis_codes = save_icertis_codes
         self._last_form_numbers: dict[str, str] = form_numbers or {}
+        self._last_icertis_codes: dict[str, str] = icertis_codes or {}
         self._fy = fy
         self._quarter = quarter
 
@@ -376,7 +380,7 @@ class GenerateReportDialog(ctk.CTkToplevel):
 
         # ── Title ─────────────────────────────────────────────────────
         ctk.CTkLabel(
-            self, text="Select Suppliers & Enter Form #",
+            self, text="Select Suppliers & Enter Details",
             font=ctk.CTkFont(size=14, weight="bold"),
         ).grid(row=0, column=0, padx=24, pady=(20, 4))
 
@@ -384,11 +388,14 @@ class GenerateReportDialog(ctk.CTkToplevel):
         hdr_frame = ctk.CTkFrame(self, fg_color="transparent")
         hdr_frame.grid(row=1, column=0, padx=20, pady=(0, 2), sticky="ew")
         hdr_frame.grid_columnconfigure(0, weight=1)
-        hdr_frame.grid_columnconfigure(1, minsize=120)
+        hdr_frame.grid_columnconfigure(1, minsize=130)
+        hdr_frame.grid_columnconfigure(2, minsize=110)
         ctk.CTkLabel(hdr_frame, text="Supplier", font=ctk.CTkFont(weight="bold"), anchor="w").grid(
             row=0, column=0, padx=(28, 4), sticky="w")
+        ctk.CTkLabel(hdr_frame, text="iCertis Code", font=ctk.CTkFont(weight="bold"), anchor="w").grid(
+            row=0, column=1, padx=(0, 4), sticky="w")
         ctk.CTkLabel(hdr_frame, text="Form #", font=ctk.CTkFont(weight="bold"), anchor="w").grid(
-            row=0, column=1, padx=(0, 8), sticky="w")
+            row=0, column=2, padx=(0, 8), sticky="w")
 
         # ── Supplier rows (scrollable) ────────────────────────────────
         row_height = 38
@@ -397,10 +404,12 @@ class GenerateReportDialog(ctk.CTkToplevel):
         )
         scroll.grid(row=2, column=0, padx=16, pady=(0, 8), sticky="ew")
         scroll.grid_columnconfigure(0, weight=1)
-        scroll.grid_columnconfigure(1, minsize=120)
+        scroll.grid_columnconfigure(1, minsize=130)
+        scroll.grid_columnconfigure(2, minsize=110)
 
         self._supplier_vars: dict[str, BooleanVar] = {}
         self._form_entries: dict[str, ctk.CTkEntry] = {}
+        self._icertis_entries: dict[str, ctk.CTkEntry] = {}
 
         if self._suppliers:
             for i, supplier in enumerate(self._suppliers):
@@ -411,11 +420,17 @@ class GenerateReportDialog(ctk.CTkToplevel):
                     checkbox_width=18, checkbox_height=18,
                     font=ctk.CTkFont(size=12),
                 ).grid(row=i, column=0, padx=(10, 4), pady=3, sticky="w")
-                entry = ctk.CTkEntry(scroll, width=110, placeholder_text="Form #")
+                icertis_entry = ctk.CTkEntry(scroll, width=120, placeholder_text="iCertis Code")
+                last_ic = self._last_icertis_codes.get(supplier, "")
+                if last_ic:
+                    icertis_entry.insert(0, last_ic)
+                icertis_entry.grid(row=i, column=1, padx=(0, 4), pady=3, sticky="ew")
+                self._icertis_entries[supplier] = icertis_entry
+                entry = ctk.CTkEntry(scroll, width=100, placeholder_text="Form #")
                 last = self._last_form_numbers.get(supplier, "")
                 if last:
                     entry.insert(0, last)
-                entry.grid(row=i, column=1, padx=(0, 8), pady=3, sticky="ew")
+                entry.grid(row=i, column=2, padx=(0, 8), pady=3, sticky="ew")
                 self._form_entries[supplier] = entry
         else:
             ctk.CTkLabel(
@@ -440,7 +455,7 @@ class GenerateReportDialog(ctk.CTkToplevel):
             fg_color="transparent", border_width=1, command=self.destroy,
         ).pack(side="left")
 
-        W, H = 520, 460
+        W, H = 640, 460
         self.update_idletasks()
         px, py = parent.winfo_x(), parent.winfo_y()
         pw, ph = parent.winfo_width(), parent.winfo_height()
@@ -470,6 +485,7 @@ class GenerateReportDialog(ctk.CTkToplevel):
 
         # Collect per-supplier form numbers; require all selected to have one
         form_numbers: dict[str, str] = {}
+        icertis_codes: dict[str, str] = {}
         missing_form: list[str] = []
         for supplier in selected:
             num = self._form_entries[supplier].get().strip()
@@ -477,6 +493,9 @@ class GenerateReportDialog(ctk.CTkToplevel):
                 missing_form.append(supplier)
             else:
                 form_numbers[supplier] = num
+            ic = self._icertis_entries[supplier].get().strip()
+            if ic:
+                icertis_codes[supplier] = ic
 
         if missing_form:
             self._error_label.configure(
@@ -484,9 +503,11 @@ class GenerateReportDialog(ctk.CTkToplevel):
             )
             return
 
-        # Save form numbers to config before closing
+        # Save to config before closing
         if self._save_form_numbers:
             self._save_form_numbers(form_numbers)
+        if self._save_icertis_codes:
+            self._save_icertis_codes(icertis_codes)
 
         output_path = self._output_path
         log = self._log_callback
@@ -495,7 +516,7 @@ class GenerateReportDialog(ctk.CTkToplevel):
 
         def worker() -> None:
             try:
-                out_paths, blanks = run_report_pipeline(output_path, selected, form_numbers, log, self._fy, self._quarter)
+                out_paths, blanks = run_report_pipeline(output_path, selected, form_numbers, log, self._fy, self._quarter, icertis_codes)
                 if out_paths:
                     log(
                         f"=== Report saved: {len(out_paths)} file(s) "
@@ -802,6 +823,8 @@ class MainWindow(ctk.CTk):
                 save_form_numbers=self._save_form_numbers,
                 fy=fy_int,
                 quarter=self._last_quarter or None,
+                icertis_codes=self._settings.icertis_codes,
+                save_icertis_codes=self._save_icertis_codes,
             ).focus()
 
         def open_form() -> None:
@@ -866,10 +889,16 @@ class MainWindow(ctk.CTk):
             save_form_numbers=self._save_form_numbers,
             fy=fy_int,
             quarter=self._last_quarter or None,
+            icertis_codes=self._settings.icertis_codes,
+            save_icertis_codes=self._save_icertis_codes,
         ).focus()
 
     def _save_form_numbers(self, form_numbers: dict[str, str]) -> None:
         self._settings.form_numbers.update(form_numbers)
+        self._settings.save()
+
+    def _save_icertis_codes(self, icertis_codes: dict[str, str]) -> None:
+        self._settings.icertis_codes.update(icertis_codes)
         self._settings.save()
 
     # ------------------------------------------------------------------

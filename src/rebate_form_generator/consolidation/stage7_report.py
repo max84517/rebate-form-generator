@@ -181,6 +181,40 @@ def _iter_hf_containers(doc: Document, include_footers: bool = True):
                 pass
 
 
+def _replace_sdt_content(doc: Document, replacements: dict[str, str]) -> None:
+    """Replace keywords inside Word Content Controls (w:sdt).
+
+    Modifies w:t text directly within w:sdtContent and removes w:showingPlcHdr
+    so Word displays the replaced content instead of the placeholder.
+    """
+    from docx.oxml.ns import qn
+
+    xml_roots = [doc.element.body]
+    for hf in _iter_hf_containers(doc):
+        try:
+            xml_roots.append(hf._element)
+        except Exception:
+            pass
+
+    for root in xml_roots:
+        for sdt in root.iter(qn("w:sdt")):
+            sdt_content = sdt.find(qn("w:sdtContent"))
+            if sdt_content is None:
+                continue
+            for t in sdt_content.iter(qn("w:t")):
+                if not t.text:
+                    continue
+                for key, value in replacements.items():
+                    if key in t.text:
+                        t.text = t.text.replace(key, value)
+            # Remove showingPlcHdr so Word shows content, not placeholder
+            sdt_pr = sdt.find(qn("w:sdtPr"))
+            if sdt_pr is not None:
+                plc = sdt_pr.find(qn("w:showingPlcHdr"))
+                if plc is not None:
+                    sdt_pr.remove(plc)
+
+
 def _replace_in_doc(doc: Document, replacements: dict[str, str], bold_keys: set[str] | None = None) -> None:
     """Replace keywords in body paragraphs, tables, and all section headers/footers."""
 
@@ -224,12 +258,22 @@ def _replace_xml_fallback(doc: Document, replacements: dict[str, str], bold_keys
 
     for root in xml_roots:
         for para_elem in root.iter(qn("w:p")):
-            # Skip paragraphs that contain field characters (PAGE, NUMPAGES, etc.)
-            # to avoid corrupting field structures.  Use iter() — fldChar is nested
-            # inside w:r, so find() (direct children only) would miss it.
+            # Skip paragraphs that contain field characters
             if next(para_elem.iter(qn("w:fldChar")), None) is not None:
                 continue
-            t_elems = list(para_elem.iter(qn("w:t")))
+            # Only include w:t elements NOT inside a nested w:sdt
+            # (SDT content is handled by _replace_sdt_content)
+            t_elems = []
+            for t in para_elem.iter(qn("w:t")):
+                inside_sdt = False
+                for anc in t.iterancestors():
+                    if anc is para_elem:
+                        break
+                    if anc.tag == qn("w:sdt"):
+                        inside_sdt = True
+                        break
+                if not inside_sdt:
+                    t_elems.append(t)
             if not t_elems:
                 continue
             full_text = "".join(t.text or "" for t in t_elems)
@@ -317,9 +361,21 @@ def _fill_product_table(table, xlsx_headers: list[str], data_rows: list[list]) -
             tbl_elem.remove(row._tr)
 
     # Insert new data rows before the first keyword row (or append if none)
+    import copy
+    from docx.oxml.ns import qn as _qn3
+    header_cells = table.rows[0].cells  # source for column width (w:tcPr)
     first_keyword_tr = keyword_trs[0] if keyword_trs else None
     for data_row in data_rows:
-        new_row = table.add_row()          # appended at end by python-docx
+        new_row = table.add_row()
+        # Copy w:tcPr from header row cells to preserve column widths
+        for new_cell, hdr_cell in zip(new_row.cells, header_cells):
+            hdr_tcPr = hdr_cell._tc.find(_qn3("w:tcPr"))
+            if hdr_tcPr is not None:
+                new_tc = new_cell._tc
+                existing = new_tc.find(_qn3("w:tcPr"))
+                if existing is not None:
+                    new_tc.remove(existing)
+                new_tc.insert(0, copy.deepcopy(hdr_tcPr))
         _fill_row_cells(new_row, col_map, data_row, xlsx_headers)
         if first_keyword_tr is not None:
             new_tr = new_row._tr
@@ -351,7 +407,7 @@ def _effective_date_from_fy_quarter(fy_2digit: int, quarter: int) -> str:
     else:  # Q4
         month, year = 8, full_year
     from datetime import datetime as _dt
-    return _dt(year, month, 1).strftime("%b %Y")
+    return _dt(year, month, 1).strftime("%B 1, %Y")
 
 
 def generate_report(
@@ -364,7 +420,8 @@ def generate_report(
     log: Callable[[str, str], None],
     fy: int | None = None,
     quarter: int | None = None,
-) -> list[Path]:
+    icertis_codes: dict[str, str] | None = None,
+) -> tuple[list[Path], dict[str, list[str]]]:
     """Generate one Word contract per supplier.
 
     Returns a list of paths to the written ``.docx`` files.
@@ -413,15 +470,14 @@ def generate_report(
             return ""
 
         replacements = {
-            "<Supplier Name>":   _val("Supplier Name"),
-            "<Contract Number>": _val("Contract Number"),
-            "<Version>":         form_numbers.get(supplier, ""),
-            "<Name of Entity>":  _val("Name of Entity"),
-            "<Address>":         _val("Address"),
-            "<Signer>":          _val("Signer"),
-            "<Title>":           _val("Title"),
-            "<SUPPLIER-Sign>":   _val("SUPPLIER-Sign"),
-            "<Effective Date>":  (
+            "ICMRebateAgreementCode": _val("ICMRebateAgreementCode"),
+            "ICMAgreementCode":       (icertis_codes or {}).get(supplier, ""),
+            "CW#":                    _val("CW#"),
+            "ICMPartyName1":          _val("ICMPartyName1"),
+            "ICMExternalSignatory":   _val("ICMExternalSignatory"),
+            "ICMExternalSignatoryTitle": _val("ICMExternalSignatoryTitle"),
+            "ICMAgreementNumber1":    form_numbers.get(supplier, ""),
+            "ICMEffectiveDate":  (
                 _effective_date_from_fy_quarter(fy, quarter)
                 if fy is not None and quarter is not None
                 else datetime.now().strftime("%b %Y")
@@ -444,34 +500,40 @@ def generate_report(
 
         doc = Document(template_docx)
 
-        # ── Diagnostics: verify Excel column mapping and Word keyword detection ──
+        # ── Diagnostics ───────────────────────────────────────────────────────
         from docx.oxml.ns import qn as _qn
-        log(f"  [{supplier}] Excel info columns: {list(info.keys())}", "INFO")
-        _sign_val = _val("SUPPLIER-Sign")
-        log(f"  [{supplier}] SUPPLIER-Sign value: {repr(_sign_val)}", "INFO")
-        _supplier_texts = [
-            t.text for t in doc.element.body.iter(_qn("w:t"))
-            if t.text and "SUPPLIER" in t.text.upper()
-        ]
-        log(f"  [{supplier}] Word body — 'SUPPLIER' text nodes: {_supplier_texts}", "INFO")
+        import lxml.etree as _etree
+        all_texts = [t.text for t in doc.element.body.iter(_qn("w:t")) if t.text and t.text.strip()]
+        log(f"  [{supplier}] Template text nodes (first 20): {all_texts[:20]}", "INFO")
+        log(f"  [{supplier}] Replacements keys: {list(replacements.keys())}", "INFO")
+        # Show XML around ICMEffectiveDate
+        for t in doc.element.body.iter(_qn("w:t")):
+            if t.text and "ICMEffectiveDate" in t.text:
+                parent = t.getparent()
+                grandparent = parent.getparent() if parent is not None else None
+                great = grandparent.getparent() if grandparent is not None else None
+                log(f"  [{supplier}] ICMEffectiveDate XML context:\n{_etree.tostring(great or grandparent or parent, pretty_print=True).decode()[:2000]}", "INFO")
 
-        _replace_in_doc(doc, replacements, bold_keys={"<SUPPLIER-Sign>"})
-        _replace_xml_fallback(doc, replacements, bold_keys={"<SUPPLIER-Sign>"})
+        # Sort by key length descending to avoid substring replacement
+        # (e.g. replace ICMExternalSignatoryTitle before ICMExternalSignatory)
+        sorted_replacements = dict(
+            sorted(replacements.items(), key=lambda kv: len(kv[0]), reverse=True)
+        )
 
-        # ── Post-replacement check ────────────────────────────────────────────
-        _still_sign = [
-            t.text for t in doc.element.body.iter(_qn("w:t"))
-            if t.text and "<SUPPLIER-Sign>" in t.text
-        ]
-        if _still_sign:
-            log(f"  [{supplier}] WARNING: <SUPPLIER-Sign> still present after replacement", "WARNING")
-        elif _sign_val:
-            log(f"  [{supplier}] <SUPPLIER-Sign> replaced with {repr(_sign_val)}", "INFO")
+        _replace_sdt_content(doc, sorted_replacements)   # first: convert SDTs to plain runs
+        _replace_in_doc(doc, sorted_replacements)          # then: regular paragraph replacement
+        _replace_xml_fallback(doc, sorted_replacements)    # finally: catch any remaining splits
 
-        product_table = _find_product_table(doc)
-        if product_table is None:
-            log(f"  [{supplier}] Product Rebate Table not found in template", "WARNING")
+        # Find first table anywhere in the document (including inside SDTs/containers)
+        from docx.oxml.ns import qn as _qn2
+        first_tbl = next(doc.element.body.iter(_qn2("w:tbl")), None)
+        if first_tbl is None:
+            log(f"  [{supplier}] No table found in template", "WARNING")
+            product_table = None
         else:
+            from docx.table import Table
+            product_table = Table(first_tbl, doc)
+        if product_table is not None:
             _fill_product_table(product_table, xlsx_headers, xlsx_data)
 
         fname = f"Rebate Agreement Update Form#{form_numbers.get(supplier, '')}_{supplier}.docx"
