@@ -527,7 +527,7 @@ def generate_report(
         if product_table is not None:
             _fill_product_table(product_table, xlsx_headers, xlsx_data)
 
-        fname = f"Rebate Agreement Update Form#{form_numbers.get(supplier, '')}_{supplier}.docx"
+        fname = f"Rebate Agreement Update Form_{form_numbers.get(supplier, '')}_{supplier}.docx"
         out_path = out_dir / fname
         doc.save(out_path)
         log(f"  [{supplier}] Saved → {fname}", "INFO")
