@@ -500,25 +500,16 @@ def generate_report(
 
         doc = Document(template_docx)
 
-        # ── Diagnostics ───────────────────────────────────────────────────────
-        from docx.oxml.ns import qn as _qn
-        import lxml.etree as _etree
-        all_texts = [t.text for t in doc.element.body.iter(_qn("w:t")) if t.text and t.text.strip()]
-        log(f"  [{supplier}] Template text nodes (first 20): {all_texts[:20]}", "INFO")
-        log(f"  [{supplier}] Replacements keys: {list(replacements.keys())}", "INFO")
-        # Show XML around ICMEffectiveDate
-        for t in doc.element.body.iter(_qn("w:t")):
-            if t.text and "ICMEffectiveDate" in t.text:
-                parent = t.getparent()
-                grandparent = parent.getparent() if parent is not None else None
-                great = grandparent.getparent() if grandparent is not None else None
-                log(f"  [{supplier}] ICMEffectiveDate XML context:\n{_etree.tostring(great or grandparent or parent, pretty_print=True).decode()[:2000]}", "INFO")
-
         # Sort by key length descending to avoid substring replacement
         # (e.g. replace ICMExternalSignatoryTitle before ICMExternalSignatory)
         sorted_replacements = dict(
             sorted(replacements.items(), key=lambda kv: len(kv[0]), reverse=True)
         )
+
+        # Warn about keywords that will be replaced with empty string
+        missing_keys = [k for k, v in sorted_replacements.items() if not v]
+        if missing_keys:
+            log(f"  [{supplier}] Missing values for keywords: {missing_keys}", "WARNING")
 
         _replace_sdt_content(doc, sorted_replacements)   # first: convert SDTs to plain runs
         _replace_in_doc(doc, sorted_replacements)          # then: regular paragraph replacement
