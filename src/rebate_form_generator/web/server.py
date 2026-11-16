@@ -289,11 +289,11 @@ class App:
 
     @property
     def contract_info(self) -> ContractInfoStore:
-        return ContractInfoStore(self.base_dir)
+        return ContractInfoStore(self.data_dir)
 
     @property
     def templates(self) -> TemplateStore:
-        return TemplateStore(self.base_dir / "template")
+        return TemplateStore(self.data_dir / "template")
 
     def missing_shared_values(self) -> tuple[list[dict], str]:
         """Shared values the template needs but nobody has set.
@@ -341,11 +341,6 @@ class App:
     def work_dir(self) -> Path:
         """Derived data, outside the project so OneDrive does not sync it."""
         return self.settings.work_dir
-
-    # Kept so existing call sites reading inputs stay correct.
-    @property
-    def base_dir(self) -> Path:
-        return self.data_dir
 
     # ── config ───────────────────────────────────────────────────────
     def config_payload(self) -> dict:
@@ -655,7 +650,7 @@ class Handler(BaseHTTPRequestHandler):
             data["port"] = self.server.server_address[1]
             data["received_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
             try:
-                target = app.base_dir / "last-client.json"
+                target = app.data_dir / "last-client.json"
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(json.dumps(data, indent=2, ensure_ascii=False),
                                   encoding="utf-8")
@@ -729,7 +724,7 @@ class Handler(BaseHTTPRequestHandler):
 
         # ── Stage 6 ──────────────────────────────────────────────────
         if route == "/api/form-data":
-            rebate_raw = app.base_dir / "rebate raw" / "rebate raw.xlsx"
+            rebate_raw = app.work_dir / "rebate raw" / "rebate raw.xlsx"
             if not rebate_raw.exists():
                 return self._json({"ok": False, "error":
                     "rebate raw.xlsx not found. Run 'Consolidate Rebate Data' "
