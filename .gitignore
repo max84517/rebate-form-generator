@@ -13,6 +13,14 @@ data/output/
 data/source data/
 data/rebate raw/
 data/rebate form input/
+data/last-client.json
+data/template/.preview/
+
+# Operational data: supplier signatories, contract codes, template registry
+data/contract_info.json
+data/templates.json
+data/template/templates.json
+data/source data/_provenance.json
 
 # Keep the gitkeep placeholder
 !data/output/.gitkeep

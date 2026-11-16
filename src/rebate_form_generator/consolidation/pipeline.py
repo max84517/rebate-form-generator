@@ -34,7 +34,8 @@ from typing import Callable
 
 from openpyxl import load_workbook
 
-from .stage1_ingest import ingest_nb, ingest_segment
+from . import issues
+from .stage1_ingest import ingest_nb, ingest_segment, scan_nb, scan_segment
 from .stage2_segment import consolidate_segment
 from .stage3_all import consolidate_all
 from .stage4_rebate import build_rebate_only
@@ -51,16 +52,49 @@ _cache: dict = {
 }
 
 
-def get_available_fy_sheets(
+def scan_fy_coverage(
     source_paths: dict,
+    log: Callable[[str, str], None],
+) -> tuple[list[str], dict]:
+    """List the FY sheets each supplier has, without ingesting anything.
+
+    Only sheet *names* are read, so this is quick enough to run before the FY
+    dialog. Nothing is copied or written: the heavy work happens afterwards,
+    against the one FY that was chosen, so a run never processes — or
+    complains about — a year you did not ask for.
+    """
+    issues.reset()
+
+    nb_cov, nb_fy = scan_nb(Path(source_paths["nb_kb"]), log)
+    dt_cov, dt_fy = scan_segment(Path(source_paths["dt_kb"]), "DT", log)
+    peri_cov, peri_fy = scan_segment(Path(source_paths["peripheral"]), "Peripheral", log)
+
+    coverage: dict[str, dict[str, list[str]]] = {
+        "bNB":        nb_cov.get("bNB", {}),
+        "cNB":        nb_cov.get("cNB", {}),
+        "DT":         dt_cov,
+        "Peripheral": peri_cov,
+    }
+
+    def _fy_key(name: str) -> int:
+        digits = "".join(c for c in name if c.isdigit())
+        return int(digits) if digits else 0
+
+    fy_sheets = sorted(nb_fy | dt_fy | peri_fy, key=_fy_key)
+    log(f"Available FY: {fy_sheets}", "INFO")
+    return fy_sheets, coverage
+
+
+def build_rebate_raw(
+    source_paths: dict,
+    fy_sheet: str,
     output_path: Path,
     log: Callable[[str, str], None],
 ) -> list[str]:
-    """Run Stages 1–4 and return the list of available FY sheet names.
+    """Run Stages 1–4 for a single FY and return the sheet names produced."""
+    issues.reset()
+    fy = fy_sheet.strip().upper()
 
-    Results are cached so that a subsequent :func:`run_full_pipeline` call
-    with the same *output_path* can skip Stages 1–4.
-    """
     # Directories derived from output_path
     #   data/source data  → ingested supplier workbooks
     #   data/pricing data → final output (rebate raw.xlsx)
@@ -105,15 +139,16 @@ def get_available_fy_sheets(
     # ------------------------------------------------------------------
     # Stage 1 — Ingest
     # ------------------------------------------------------------------
-    log("=== Stage 1: Ingest ===", "INFO")
+    log(f"=== Stage 1: Ingest ({fy} only) ===", "INFO")
     log("Processing NB KB …", "INFO")
-    nb_cov = ingest_nb(nb_kb, source_data_dir / "NB", log)
+    nb_cov = ingest_nb(nb_kb, source_data_dir / "NB", log, fy=fy)
 
     log("Processing DT KB …", "INFO")
-    dt_cov = ingest_segment(dt_kb, "DT", source_data_dir / "DT", log)
+    dt_cov = ingest_segment(dt_kb, "DT", source_data_dir / "DT", log, fy=fy)
 
     log("Processing Peripheral …", "INFO")
-    peri_cov = ingest_segment(peripheral, "Peripheral", source_data_dir / "Peripheral", log)
+    peri_cov = ingest_segment(peripheral, "Peripheral", source_data_dir / "Peripheral",
+                              log, fy=fy)
 
     # Build combined coverage: segment → {supplier: [FY sheets]}
     coverage: dict[str, dict[str, list[str]]] = {
@@ -136,7 +171,8 @@ def get_available_fy_sheets(
         ("Peripheral", source_data_dir / "Peripheral", None),
     ]:
         log(f"Consolidating {seg} …", "INFO")
-        path = consolidate_segment(seg, raw_dir, tmp_dir, log, sheet_suffix=suffix)
+        path = consolidate_segment(seg, raw_dir, tmp_dir, log,
+                                   sheet_suffix=suffix, only_fy=fy)
         if path is not None:
             segment_files.append(path)
 
@@ -157,16 +193,15 @@ def get_available_fy_sheets(
     _cache["output_path"] = output_path
     _cache["pricing_data_dir"] = pricing_data_dir
     _cache["coverage"] = coverage
+    _cache["fy"] = fy
 
     if rebate_path is None:
-        return [], {}
+        return []
 
     wb = load_workbook(rebate_path, data_only=True, read_only=True)
     fy_sheets = [ws.title for ws in wb.worksheets]
     wb.close()
-
-    log(f"Available FY sheets: {fy_sheets}", "INFO")
-    return fy_sheets, coverage
+    return fy_sheets
 
 
 def run_full_pipeline(
@@ -175,17 +210,18 @@ def run_full_pipeline(
     output_path: Path,
     log: Callable[[str, str], None],
 ) -> Path | None:
-    """Run Stage 5 (and Stages 1–4 if the cache is stale).
+    """Run Stages 1–5 for *fy_sheet* only.
 
-    Returns the path to ``Pricing_Template_InputDevices.xlsx``, or ``None``.
+    Returns the path to ``rebate raw.xlsx``, or ``None``.
     """
+    fy_sheets = build_rebate_raw(source_paths, fy_sheet, output_path, log)
     rebate_path: Path | None = _cache.get("rebate_path")
-    cached_output: Path | None = _cache.get("output_path")
-
-    if rebate_path is None or cached_output != output_path:
-        log("Cache miss — running Stages 1–4 first …", "INFO")
-        get_available_fy_sheets(source_paths, output_path, log)
-        rebate_path = _cache.get("rebate_path")
+    if rebate_path is None:
+        log("Nothing to write: no data survived stages 1-4.", "ERROR")
+        return None
+    if fy_sheets and fy_sheet.strip().upper() not in {s.strip().upper() for s in fy_sheets}:
+        log(f"'{fy_sheet}' produced no data. Sheets built: {fy_sheets}", "ERROR")
+        return None
 
     pricing_data_dir: Path = _cache.get("pricing_data_dir") or (output_path.parent / "pricing data")
 
@@ -289,6 +325,7 @@ def run_rebate_form_pipeline(
     *selected_columns* are the optional feature columns to keep.
     Returns a list of paths to the written files (empty list on failure).
     """
+    issues.reset()
     rebate_raw_path = output_path.parent / "rebate raw" / "rebate raw.xlsx"
     output_dir = output_path.parent / "rebate form input"
     log(f"=== Stage 6: Generate Form Data (FY{fy:02d} Q{quarter}) ===", "INFO")
@@ -303,12 +340,14 @@ def run_report_pipeline(
     fy: int | None = None,
     quarter: int | None = None,
     icertis_codes: dict[str, str] | None = None,
+    destination: Path | None = None,
 ) -> tuple[list[Path], dict[str, list[str]]]:
     """Stage 7: generate per-supplier Word contracts.
 
     Returns ``(out_paths, blanks)`` where *blanks* maps supplier name to a
     list of column names that contain at least one blank cell.
     """
+    issues.reset()
     base = output_path.parent
     supplier_info_dir = base / "supplier info"
     template_dir = base / "template"
@@ -316,5 +355,6 @@ def run_report_pipeline(
     log(f"=== Stage 7: Generate Report ===", "INFO")
     return generate_report(
         supplier_info_dir, template_dir, rebate_form_input_dir,
-        output_path, suppliers, form_numbers, log, fy, quarter, icertis_codes,
+        destination or output_path, suppliers, form_numbers, log,
+        fy, quarter, icertis_codes,
     )

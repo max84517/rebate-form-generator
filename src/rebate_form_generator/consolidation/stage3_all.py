@@ -1,8 +1,10 @@
 """Stage 3 — Merge all segment Consolidated files into one workbook.
 
 Reads the four ``Consolidated_<segment>_<YYYYMMDD>.xlsx`` files produced by
-Stage 2 and stacks them vertically per FY sheet.  The first segment in each
-sheet contributes the header row; subsequent segments contribute only data.
+Stage 2 and stacks them vertically per FY sheet.
+
+Like Stage 2, columns are matched **by name**: bNB, cNB, DT and Peripheral do
+not all carry the same column set, so a positional stack would misfile values.
 
 Output: ``<output_base>/tmp/all/consolidate_all_<YYYYMMDD>.xlsx``
 """
@@ -14,6 +16,8 @@ from typing import Callable
 
 from openpyxl import load_workbook
 from openpyxl.workbook import Workbook
+
+from .headers import header_map, is_header_row
 
 
 def _is_all_none(row: tuple | list) -> bool:
@@ -51,41 +55,55 @@ def consolidate_all(
     # -----------------------------------------------------------------------
     for fy in sorted(all_fy):
         out_ws = out_wb.create_sheet(fy)
-        first_seg = True
-        merged_segs = 0
+
+        # ── Pass A: collect each segment's rows and build the column union ──
+        per_seg: list[dict] = []
+        column_order: list[str] = []
+        display_name: dict[str, str] = {}
 
         for seg_path in segment_paths:
             wb = load_workbook(seg_path, data_only=True, read_only=True)
-            ws = None
-            for sheet in wb.worksheets:
-                if sheet.title.strip().upper() == fy:
-                    ws = sheet
-                    break
-
+            ws = next((s for s in wb.worksheets if s.title.strip().upper() == fy), None)
             if ws is None:
                 wb.close()
                 continue
-
-            rows = list(ws.iter_rows(values_only=True))
+            rows = [tuple(r) for r in ws.iter_rows(values_only=True)]
             wb.close()
-
             if not rows:
                 continue
 
-            if first_seg:
-                for row in rows:
-                    if not _is_all_none(row):
-                        out_ws.append(list(row))
-                first_seg = False
-            else:
-                # Skip first row (header already written)
-                for row in rows[1:]:
-                    if not _is_all_none(row):
-                        out_ws.append(list(row))
+            hmap = header_map(rows[0])
+            if not hmap:
+                log(f"  [All] {fy}: {seg_path.name} has no header row — skipped", "WARNING")
+                continue
+            for name in hmap:
+                if name not in display_name:
+                    display_name[name] = str(rows[0][hmap[name]]).strip()
+                    column_order.append(name)
+            per_seg.append({"name": seg_path.name, "rows": rows, "hmap": hmap})
 
-            merged_segs += 1
+        if not per_seg:
+            continue
 
-        log(f"  [All] {fy}: merged {merged_segs} segment(s)", "INFO")
+        # ── Pass B: write header then map every segment's rows by name ─────
+        out_ws.append([display_name[n] for n in column_order])
+        known = set(column_order)
+        merged = 0
+
+        for seg in per_seg:
+            hmap = seg["hmap"]
+            for row in seg["rows"][1:]:
+                if _is_all_none(row) or is_header_row(row, known):
+                    continue
+                mapped = [
+                    row[hmap[n]] if n in hmap and hmap[n] < len(row) else None
+                    for n in column_order
+                ]
+                if not _is_all_none(mapped):
+                    out_ws.append(mapped)
+            merged += 1
+
+        log(f"  [All] {fy}: merged {merged} segment(s), {len(column_order)} column(s)", "INFO")
 
     all_dir = output_base / "tmp" / "all"
     all_dir.mkdir(parents=True, exist_ok=True)

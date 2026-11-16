@@ -1,14 +1,14 @@
-[tool.poetry]
+﻿[tool.poetry]
 name = "rebate-form-generator"
-version = "1.1.2"
-description = "Rebate contract pricing template generator"
+version = "1.8.0"
+description = "Rebate contract pricing template generator (local web UI)"
 authors = []
 packages = [{include = "rebate_form_generator", from = "src"}]
+include = [{path = "src/rebate_form_generator/web/static/*", format = ["sdist", "wheel"]}]
 
 [tool.poetry.dependencies]
 python = ">=3.10,<4.0"
 openpyxl = ">=3.1"
-customtkinter = ">=5.2"
 python-docx = ">=1.1"
 
 [tool.poetry.scripts]

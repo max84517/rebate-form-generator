@@ -29,6 +29,8 @@ from docx import Document
 from docx.shared import Pt
 from openpyxl import load_workbook
 
+from .headers import safe_filename_part
+
 # Detect keyword placeholders like <Supplier Name>, <SUPPLIER-SIGN>, etc.
 _KEYWORD_RE = re.compile(r"<[A-Za-z]")
 
@@ -75,10 +77,18 @@ def _format_cell(value, header: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 def _read_supplier_info(info_path: Path) -> dict[str, dict]:
-    """Return ``{supplier_name: {column: value}}`` from the supplier info Excel."""
+    """Return ``{supplier_name: {column: value}}`` from a supplier info Excel.
+
+    Only used as a fallback; contract details normally come from the store in
+    :mod:`rebate_form_generator.config.contract_info`.
+    """
     wb = load_workbook(info_path, data_only=True)
     ws = wb.active
-    headers = [_str(cell.value) for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    header_cells = next(ws.iter_rows(min_row=1, max_row=1), None)
+    if header_cells is None:
+        wb.close()
+        return {}
+    headers = [_str(cell.value) for cell in header_cells]
     result: dict[str, dict] = {}
     for row in ws.iter_rows(min_row=2, values_only=True):
         row_data = {h: v for h, v in zip(headers, row)}
@@ -108,7 +118,11 @@ def _read_contract_input(xlsx_path: Path) -> tuple[list[str], list[list]]:
     """Return ``(headers, data_rows)`` from a contract input xlsx."""
     wb = load_workbook(xlsx_path, data_only=True)
     ws = wb.active
-    headers = [_str(cell.value) for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+    header_cells = next(ws.iter_rows(min_row=1, max_row=1), None)
+    if header_cells is None:
+        wb.close()
+        return [], []
+    headers = [_str(cell.value) for cell in header_cells]
     data = [list(row) for row in ws.iter_rows(min_row=2, values_only=True)]
     wb.close()
     return headers, data
@@ -179,6 +193,79 @@ def _iter_hf_containers(doc: Document, include_footers: bool = True):
                 yield hf
             except Exception:
                 pass
+
+
+def _sdt_keyword(sdt, qn) -> str:
+    """The keyword a content control is bound to, from its alias or tag.
+
+    iCertis tags look like ``ICM|ICMInternalSignatory|13`` with the alias
+    carrying the bare keyword.
+    """
+    pr = sdt.find(qn("w:sdtPr"))
+    if pr is None:
+        return ""
+    alias = pr.find(qn("w:alias"))
+    if alias is not None:
+        value = alias.get(qn("w:val")) or ""
+        if value:
+            return value.strip()
+    tag = pr.find(qn("w:tag"))
+    if tag is not None:
+        value = (tag.get(qn("w:val")) or "").strip()
+        parts = value.split("|")
+        if len(parts) >= 2:
+            return parts[1].strip()
+        return value
+    return ""
+
+
+def _replace_sdt_by_alias(doc: Document, replacements: dict[str, str]) -> set[str]:
+    """Fill content controls by the keyword they are bound to.
+
+    Needed for fields the template already shows a real value for — the HP
+    signer and legal entity are literal text inside their control, so matching
+    on the visible text would never find them.
+
+    An empty replacement is skipped so the template keeps what it has rather
+    than losing the text. Returns the keywords that were filled.
+    """
+    from docx.oxml.ns import qn
+
+    roots = [doc.element.body]
+    for hf in _iter_hf_containers(doc):
+        try:
+            roots.append(hf._element)
+        except Exception:
+            pass
+
+    filled: set[str] = set()
+    for root in roots:
+        for sdt in root.iter(qn("w:sdt")):
+            keyword = _sdt_keyword(sdt, qn)
+            if keyword not in replacements:
+                continue
+            value = replacements[keyword]
+            if value == "" or value is None:
+                continue          # leave the template's own text alone
+            content = sdt.find(qn("w:sdtContent"))
+            if content is None:
+                continue
+            text_nodes = [t for t in content.iter(qn("w:t"))]
+            if not text_nodes:
+                continue
+            # Nested controls own their own text; do not stomp on them.
+            if any(_sdt_keyword(child, qn) for child in content.iter(qn("w:sdt"))):
+                continue
+            text_nodes[0].text = value
+            for extra in text_nodes[1:]:
+                extra.text = ""
+            pr = sdt.find(qn("w:sdtPr"))
+            if pr is not None:
+                plc = pr.find(qn("w:showingPlcHdr"))
+                if plc is not None:
+                    pr.remove(plc)
+            filled.add(keyword)
+    return filled
 
 
 def _replace_sdt_content(doc: Document, replacements: dict[str, str]) -> None:
@@ -426,24 +513,52 @@ def generate_report(
 
     Returns a list of paths to the written ``.docx`` files.
     """
-    # ── Supplier info Excel ───────────────────────────────────────────
-    info_xlsx = _get_latest_file(supplier_info_dir, ".xlsx")
-    if info_xlsx is None:
-        log(f"No Excel found in supplier info folder: {supplier_info_dir}", "ERROR")
-        return [], {}
-    log(f"  Supplier info: {info_xlsx.name}", "INFO")
-    supplier_info = _read_supplier_info(info_xlsx)
+    # ── Contract details ──────────────────────────────────────────────
+    from rebate_form_generator.config.contract_info import ContractInfoStore
+
+    store = ContractInfoStore(supplier_info_dir.parent)
+    supplier_info = store.by_supplier()
+    shared_values = store.shared()
+    if shared_values:
+        log(f"  Shared values: {', '.join(sorted(shared_values))}", "INFO")
+    # Every column other than the supplier name is a template keyword, so a
+    # new keyword only needs a new column in Settings -> Contract Info.
+    info_fields = store.placeholder_fields() if supplier_info else []
+    if supplier_info:
+        log(f"  Contract info: {len(supplier_info)} supplier(s) from "
+            f"{store.path.name}", "INFO")
+    else:
+        # Nothing configured yet — fall back to the old workbook so an
+        # existing setup keeps working until it is imported.
+        info_xlsx = _get_latest_file(supplier_info_dir, ".xlsx")
+        if info_xlsx is None:
+            log("No contract info configured. Open Settings → Contract Info "
+                "and add your suppliers.", "ERROR")
+            return [], {}
+        log(f"  Contract info: falling back to {info_xlsx.name}", "WARNING")
+        supplier_info = _read_supplier_info(info_xlsx)
+        seen_keys: list[str] = []
+        for row in supplier_info.values():
+            for key in row:
+                if key and key != "Supplier Name" and key not in seen_keys:
+                    seen_keys.append(key)
+        info_fields = seen_keys
 
     # ── Word template ─────────────────────────────────────────────────
-    template_docx = _get_latest_file(template_dir, ".docx")
+    from rebate_form_generator.config.templates import TemplateStore
+
+    template_docx = TemplateStore(template_dir).active_path()
     if template_docx is None:
-        log(f"No Word template found in: {template_dir}", "ERROR")
+        template_docx = _get_latest_file(template_dir, ".docx")
+    if template_docx is None:
+        log("No Word template available. Open Settings → Contract Template "
+            "and upload one.", "ERROR")
         return [], {}
     log(f"  Template: {template_docx.name}", "INFO")
 
-    # ── Output folder: <output_dir>/<YYYYMMDD>/ ───────────────────────
-    today_str = date.today().strftime("%Y%m%d")
-    out_dir = output_dir / today_str
+    # ── Output folder (the caller decides; normally a temp dir that is
+    #    zipped up and handed to the browser) ──────────────────────────
+    out_dir = output_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
     out_paths: list[Path] = []
@@ -469,20 +584,20 @@ def generate_report(
                     return _str(info[k])
             return ""
 
-        replacements = {
-            "ICMRebateAgreementCode": _val("ICMRebateAgreementCode"),
-            "ICMAgreementCode":       (icertis_codes or {}).get(supplier, ""),
-            "CW#":                    _val("CW#"),
-            "ICMPartyName1":          _val("ICMPartyName1"),
-            "ICMExternalSignatory":   _val("ICMExternalSignatory"),
-            "ICMExternalSignatoryTitle": _val("ICMExternalSignatoryTitle"),
-            "ICMAgreementNumber1":    form_numbers.get(supplier, ""),
+        # Shared HP-side values first, then the per-supplier columns (which
+        # win if the same keyword appears in both), then the three values
+        # that are computed or typed in the Generate Report dialog.
+        replacements = dict(shared_values)
+        replacements.update({field: _val(field) for field in info_fields})
+        replacements.update({
+            "ICMAgreementCode":    (icertis_codes or {}).get(supplier, ""),
+            "ICMAgreementNumber1": form_numbers.get(supplier, ""),
             "ICMEffectiveDate":  (
                 _effective_date_from_fy_quarter(fy, quarter)
                 if fy is not None and quarter is not None
                 else datetime.now().strftime("%b %Y")
             ),
-        }
+        })
 
         xlsx_headers, xlsx_data = _read_contract_input(input_xlsx)
 
@@ -498,7 +613,12 @@ def generate_report(
             blanks[supplier] = blank_cols
             log(f"  [{supplier}] Blank fields: {blank_cols}", "WARNING")
 
-        doc = Document(template_docx)
+        try:
+            doc = Document(template_docx)
+        except PermissionError:
+            log(f"'{template_docx.name}' is open in another program (most likely "
+                f"Word). Close it and run Generate Report again.", "ERROR")
+            return out_paths, blanks
 
         # Sort by key length descending to avoid substring replacement
         # (e.g. replace ICMExternalSignatoryTitle before ICMExternalSignatory)
@@ -511,6 +631,9 @@ def generate_report(
         if missing_keys:
             log(f"  [{supplier}] Missing values for keywords: {missing_keys}", "WARNING")
 
+        # Bound controls first (they may already hold a real value, not the
+        # keyword), then the keyword-text passes for everything else.
+        _replace_sdt_by_alias(doc, sorted_replacements)
         _replace_sdt_content(doc, sorted_replacements)   # first: convert SDTs to plain runs
         _replace_in_doc(doc, sorted_replacements)          # then: regular paragraph replacement
         _replace_xml_fallback(doc, sorted_replacements)    # finally: catch any remaining splits
@@ -527,7 +650,9 @@ def generate_report(
         if product_table is not None:
             _fill_product_table(product_table, xlsx_headers, xlsx_data)
 
-        fname = f"Rebate Agreement Update Form_{form_numbers.get(supplier, '')}_{supplier}.docx"
+        form_no = safe_filename_part(form_numbers.get(supplier, ""), fallback="")
+        fname = (f"Rebate Agreement Update Form_{form_no}_"
+                 f"{safe_filename_part(supplier)}.docx")
         out_path = out_dir / fname
         doc.save(out_path)
         log(f"  [{supplier}] Saved → {fname}", "INFO")

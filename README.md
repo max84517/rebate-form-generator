@@ -1,25 +1,49 @@
 # Rebate Form Generator
 
-A dark-mode desktop tool that reads supplier Master Price Table workbooks, consolidates them into a **Rebate Raw** workbook, generates **Form Data input**, and produces per-supplier **Word contract update forms** for the Input Device rebate process.
+A dark-mode **local web app** for the Input Device rebate process. It reads the
+supplier Master Price Table workbooks, consolidates them for one fiscal year,
+and produces the per-supplier Word contract update forms — delivered as a single
+zip download.
 
-## Features
+Everything runs on `127.0.0.1`. No data leaves the machine.
 
-| Stage | Description |
-|-------|-------------|
-| 1 – Ingest | Reads the latest `.xlsx` from each supplier folder, applies GTK Suppliers fix, combines NB bNB + cNB into one workbook per supplier (`FY## bNB` / `FY## cNB` sheets) |
-| 2 – Segment | Consolidates all suppliers per segment (bNB, cNB, DT, Peripheral) |
-| 3 – All | Merges the four segment files into one workbook |
-| 4 – Rebate Only | Strips HP Cost / ODM Cost columns |
-| 5 – Rebate Raw | Filters to a chosen FY sheet, removes blank Platforms/Project rows, outputs `rebate raw.xlsx` |
-| 6 – Form Data | Filters to a chosen FY + quarter, expands price-change rows, deduplicates, outputs per-supplier `contract input - <Supplier>.xlsx` |
-| 7 – Report | Fills a Word template with supplier info and product rebate table, outputs per-supplier `.docx` contracts |
+```
+start.bat  →  local server on 127.0.0.1:8765  →  Chrome app window
+```
 
-## Requirements
+---
+
+## Quick start
+
+**Double-click `start.bat`.**
+
+It starts the server and opens the UI in a Chrome app-mode window with its own
+profile. Closing that window stops the server; launching again while a window is
+open reuses it rather than starting a second server.
+
+From a shell instead:
+
+```bash
+poetry run rebate-form-generator                      # Chrome app window (default)
+poetry run rebate-form-generator --browser default    # system default browser
+poetry run rebate-form-generator --browser none --port 9000
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--port` | `8765` | Preferred port; the next free one is used if taken |
+| `--browser` | `chrome` | `chrome` \| `default` \| `none` |
+
+### Requirements
 
 - Python ≥ 3.10
-- [Poetry](https://python-poetry.org/) ≥ 1.8
+- [Poetry](https://python-poetry.org/) ≥ 1.8 (for development)
+- Google Chrome — optional, falls back to the default browser
+- Microsoft Word — optional, only for rendering the template preview
 
-## Installation
+No web framework is needed: the server is built on the Python standard library
+(`http.server`), so `openpyxl` and `python-docx` are the only runtime
+dependencies.
 
 ```bash
 git clone https://github.com/max84517/rebate-form-generator.git
@@ -27,27 +51,62 @@ cd rebate-form-generator
 poetry install
 ```
 
-## Usage
+---
 
-```bash
-poetry run rebate-form-generator
+## The pipeline
+
+| Stage | Description |
+|-------|-------------|
+| 1 – Ingest | Reads the latest `.xlsx` from each supplier folder, applies the GTK Suppliers fix, combines NB bNB + cNB into one workbook per supplier |
+| 2 – Segment | Consolidates all suppliers per segment (bNB, cNB, DT, Peripheral) |
+| 3 – All | Merges the four segment files into one workbook |
+| 4 – Rebate Only | Strips HP Cost / ODM Cost columns |
+| 5 – Rebate Raw | Removes blank Platforms/Project rows, writes `rebate raw.xlsx` |
+| 6 – Form Data | Filters to a chosen quarter, expands price-change rows, deduplicates, writes `contract input - <Supplier>.xlsx` |
+| 7 – Report | Fills the Word template per supplier and packages the results as a zip |
+
+**Stages 1–5 run for one fiscal year only.** The FY is chosen *before* any
+processing starts, so a build for FY27 never reads, processes or reports on an
+FY26 sheet.
+
+---
+
+## Using it
+
+### 1. Source folders
+
+Set the three paths (NB KB, DT KB, Peripheral) — type them, or click **Browse**
+for the built-in folder picker. Paths are saved to `config.json` as you type.
+
+Each one must be the folder that **contains** a `Master price table_<Segment>`
+sub-folder. A live check under each field confirms what was found:
+
+```
+NB KB      [ C:/…/05. Cost/1 NB KB                        ] [ Browse ]
+Notebook     ✓ Master price table_NB → 6 supplier(s):
+keyboards      CHICONY, DARFON, LITEON, PRIMAX, SUNREX, TRANSIMAGE
 ```
 
-### Consolidate Rebate Data (Stages 1–5)
+### 2. File Tracker
 
-1. Set the three **Source Folder** paths (NB KB, DT KB, Peripheral).
-2. Click **Consolidate Rebate Data** — stages 1–4 run; on completion a FY selection popup appears.
-3. The popup shows per-supplier FY coverage. Select the target FY and click **Generate** — stage 5 runs and writes `rebate raw.xlsx`. Output is saved to `data/output` by default.
+The **File Tracker** button in the top bar lists the newest workbook in every
+supplier folder with its date, and flags anything not updated in the current
+month — a green tick or an orange warning per supplier, out-of-date first.
+**Refresh** re-scans at any time.
 
-### Generate Form Data (Stage 6)
+### 3. Consolidate Rebate Data
 
-1. After consolidation, click **Generate Form Data**.
-2. A popup lets you:
-   - Select the **FY + Quarter** (quarter rules below; defaults to the current quarter)
-   - Choose which **feature columns** to include (7 pre-selected by default)
-3. Click **Generate** — outputs `rebate form input/contract input - <Supplier>.xlsx` per supplier.
+Click it and the source folders are **scanned** — sheet names only, a second or
+two — then the FY dialog opens showing which FY each supplier has. Pick the
+target FY and click **Generate**: stages 1–5 run for that FY and write
+`rebate raw.xlsx`.
 
-The selected FY + Quarter is remembered in `config.json`, so the next time you open **Generate Form Data** the dropdown defaults to the same FY's current quarter automatically.
+### 4. Generate Form Data
+
+Pick the **FY + Quarter** and tick which **feature columns** to include, then
+**Generate**. Writes `contract input - <Supplier>.xlsx` per supplier.
+
+The selection is remembered in `config.json` and pre-filled next time.
 
 #### Quarter rules
 
@@ -62,36 +121,113 @@ Example: **FY26 Q1** covers Nov 2025, Dec 2025, Jan 2026.
 
 #### Output columns
 
-Selected feature columns + **GTK Suppliers** (always included) + **Per-Unit Rebate Amount $USD** (currency-formatted) + **Rebate Period Start Date**
+Selected feature columns + **GTK Suppliers** (always included) +
+**Per-Unit Rebate Amount $USD** (currency-formatted) +
+**Rebate Period Start Date**.
 
-Default checked columns: `Segment`, `Color`, `HP/ODM Part#`, `Platforms/Project`, `Product`, `Size`, `ODM (Regional Site)`
+Default checked: `Segment`, `Color`, `HP/ODM Part#`, `Platforms/Project`,
+`Product`, `Size`, `ODM (Regional Site)`.
 
-Each source row produces 1–3 output rows depending on whether the rebate price changes month-to-month within the quarter. Prices are rounded to 2 decimal places before deduplication. Duplicate rows are dropped automatically.
+Each source row produces 1–3 output rows depending on whether the rebate price
+changes month-to-month within the quarter. Prices are rounded to 2 decimal
+places before deduplication, and duplicate rows are dropped. A blank rebate cell
+is written as `$0.00`; a cell holding an Excel error drops the whole row and is
+reported.
 
-> **Note:** Columns where every row contains the same value are automatically removed from each supplier’s output file.
+### 5. Generate Report
 
-### Generate Report (Stage 7)
+Select the suppliers, enter **iCertis Code** and **Form #** for each, then
+**Generate**. Both values are saved per-supplier and pre-filled next time.
 
-1. Place the Word template (`Rebate Agreement Update Form_*.docx`) in the `template/` folder under your output parent directory.
-2. Place the supplier info Excel (`Contract Source info.xlsx`) in the `supplier info/` folder.
-3. Click **Generate Report**, select the suppliers, enter **iCertis Code** and **Form #** for each, then click **Generate**.
-   - Both values are saved to `config.json` per-supplier and pre-filled on the next launch.
-4. The tool fills keyword placeholders in the template, inserts product rebate data into the first table, and saves one `.docx` per supplier.
+The contracts are built in a temporary folder, packaged as
+`Rebate Agreement Update Forms_FY##Q#_<YYYYMMDD>.zip` and **downloaded by the
+browser** to your Downloads folder. Nothing is written to `data/output`.
+
+### Run All
+
+Runs all three stages in sequence. Each stage still opens its own dialog so you
+can review before proceeding; closing a dialog cancels the rest of the chain.
+
+---
+
+## Settings
+
+The gear in the top right opens **Contract Info**, **Contract Template** and
+**Exit**.
+
+### Contract Info
+
+Everything substituted into the Word template, in two parts.
+
+**Shared values** — the HP-side fields that are identical on every contract: the
+internal signer and their title.
+
+A shared value is **required** when the template still shows the keyword itself
+where the value belongs. If the signature block reads `ICMInternalSignatory`,
+somebody has to say who signs: Generate Report stops before producing anything
+and names the value to set, and the Report dialog checks the same thing when it
+opens. Where the template already spells a value out — HP's legal entity is
+written as `HP Inc.` — nothing is demanded and the template's own text is kept.
+
+**Per-supplier columns** — a table: add a supplier, change a value, delete a row.
+**Each column name is a placeholder keyword**, so a new keyword only needs a new
+column: use **+ Add column** and type the exact keyword from the template.
+Columns can be renamed and removed, and the table scrolls sideways once there
+are more columns than fit.
+
+`ICMAgreementCode`, `ICMAgreementNumber1` and `ICMEffectiveDate` are refused as
+columns — they come from the Generate Report dialog and the selected quarter.
+
+Stored in `data/contract_info.json`. The first time it opens, the values are
+imported from `supplier info/Contract Source info.xlsx`; after that the
+spreadsheet is no longer read.
+
+### Contract Template
+
+Upload a `.docx`, give it a name, and see when it was added. One template is
+marked **In use** and that is the one Generate Report fills in; the rest are
+kept so you can switch back, and any can be deleted.
+
+Below the list is a preview: first a check of every placeholder the current
+settings will substitute — instant, and it follows your columns and shared
+values, so a column with no matching placeholder in the template shows up as
+missing — then the document itself rendered through the installed Word. The
+first render takes roughly fifteen seconds and is cached, so reopening is
+immediate. **Expand** hides the list so the document fills the window. Without
+Word on the machine the placeholder check is still shown.
+
+### Exit, and idle shutdown
+
+**Exit** stops the server and closes the window. The app also closes itself
+after **30 minutes without interaction**, warning a minute beforehand; a running
+job postpones it.
+
+---
+
+## Template placeholders
+
+Keywords are plain text — no brackets. Placeholders inside Word Content Controls
+(`w:sdt`) are handled, and are filled **by the keyword the control is bound to**,
+not only by matching its visible text. That matters for fields the template
+already shows a real value for: the internal signer and HP legal entity are
+literal text inside their control, so text matching alone would never replace
+them.
 
 | Placeholder | Value |
 |-------------|-------|
-| `ICMRebateAgreementCode` | From `Contract Source info.xlsx` — `ICMRebateAgreementCode` column |
-| `ICMAgreementCode` | iCertis Code entered by user per supplier |
-| `ICMAgreementNumber1` | Form # entered by user per supplier |
-| `CW#` | From `Contract Source info.xlsx` — `CW#` column |
-| `ICMPartyName1` | From `Contract Source info.xlsx` — `ICMPartyName1` column |
-| `ICMExternalSignatory` | From `Contract Source info.xlsx` — `ICMExternalSignatory` column |
-| `ICMExternalSignatoryTitle` | From `Contract Source info.xlsx` — `ICMExternalSignatoryTitle` column |
-| `ICMEffectiveDate` | First day of the selected quarter, e.g. FY26 Q3 → `May 1, 2026` (auto-filled) |
+| `ICMAgreementCode` | iCertis Code, entered per supplier |
+| `ICMAgreementNumber1` | Form #, entered per supplier |
+| `ICMEffectiveDate` | First day of the selected quarter, e.g. FY26 Q3 → `May 1, 2026` |
+| `ICMInternalSignatory` | Shared value — internal signer |
+| `ICMHPSignatoryTitle` | Shared value — internal signer title |
+| `ICMRebateAgreementCode` | Per-supplier column |
+| `CW#` | Per-supplier column |
+| `ICMPartyName1` | Per-supplier column |
+| `ICMExternalSignatory` | Per-supplier column |
+| `ICMExternalSignatoryTitle` | Per-supplier column |
+| *any other column* | Its value for that supplier |
 
-> **Template note:** Keywords are plain text (no brackets). Placeholders inside Word Content Controls (w:sdt) are handled automatically.
-
-#### Product table formatting
+### Product table formatting
 
 | Column | Format |
 |--------|--------|
@@ -100,71 +236,124 @@ Each source row produces 1–3 output rows depending on whether the rebate price
 | Date columns | `YYYY-MM-DD` |
 | Other numbers | `1,234.56` |
 
-### Run All
+---
 
-Click **Run All** (green button, far right) to execute all three stages in sequence. Each stage still opens its own confirmation dialog so you can review settings before proceeding.
+## Source file validation
 
-## Source folder naming convention
+Supplier workbooks are hand-maintained, so the pipeline never trusts their
+layout:
 
-Each source folder must contain sub-folders named:
+- The **header row is located per sheet** by finding the row that starts with
+  `Segment`, scanning up to 15 rows down. Rows inserted above the header cost
+  nothing.
+- **Columns are matched by name, never by position.** The workbooks differ —
+  50 to 68 columns in practice — and a positional stack would silently file one
+  supplier's numbers under another's headings.
+- **Month names are folded**: `Rebate June 2027` and `Rebate Jun 2027` are the
+  same column.
+
+Anything the pipeline cannot handle on its own is reported against the file that
+caused it, in the log and in a **Source File Problems** pop-up with the full
+path.
+
+| Reported | Why it matters |
+|---|---|
+| **Header row not found** | No row starting with `Segment` in the first 15 rows — the sheet cannot be used at all |
+| **File could not be read** | A workbook is open in Excel. That supplier is left out; the rest of the run continues |
+| **Wrong months for this FY** | An `FY27` sheet whose rebate columns are FY26 months — copied from last year without updating the headers |
+| **Missing month column** | The sheet lacks one or more of this FY's 12 rebate months |
+| **Excel error value** | `#VALUE!`, `#REF!`, `#N/A` … in a rebate cell. The affected row is dropped, never written as a number |
+| **Supplier skipped** | No usable rebate value for any month of the quarter, so no contract input is produced for them |
+
+Handled silently, as a log line only: a shifted header row, a duplicate header
+row inside the data, and month names written in full. Nothing is lost in any of
+those cases, so there is nothing to act on.
+
+---
+
+## Folder conventions
+
+Each source folder must contain a segment folder, which in turn holds one folder
+per supplier:
 
 ```
-Master price table_<Segment>_<Supplier>
+<source folder>/
+└── Master price table_<Segment>/
+    ├── Master price table_<Segment>_CHICONY/
+    │   └── <newest .xlsx wins>
+    └── Master price table_<Segment>_DARFON/
 ```
 
-e.g. `Master price table_NB_CHICONY`, `Master price table_DT_PRIMAX`
+e.g. `Master price table_NB_CHICONY`, `Master price table_DT_PRIMAX`.
+Folders that do not match the pattern are skipped with a warning.
 
-## Output layout
+### Data layout
 
 ```
-<output path parent>/
-├── source data/
-│   ├── NB/
-│   │   └── <Supplier>.xlsx ← one workbook per supplier; sheets: "FY## bNB", "FY## cNB"
-│   ├── DT/
-│   └── Peripheral/
-├── rebate raw/
-│   └── rebate raw.xlsx           ← stage 5 output
-├── rebate form input/
-│   └── contract input - <Supplier>.xlsx  ← stage 6 output (one per supplier)
-├── supplier info/
-│   └── Contract Source info.xlsx ← user-managed; required for stage 7
-├── template/
-│   └── Rebate Agreement Update Form_*.docx  ← user-managed Word template
-└── output/
-    └── <YYYYMMDD>/
-        └── Rebate Agreement Update Form#<N>_<Supplier>.docx  ← stage 7 output
+data/
+├── contract_info.json            ← supplier contract details (Settings; git-ignored)
+├── source data/                  ← ingested supplier workbooks, one FY at a time
+├── rebate raw/rebate raw.xlsx    ← stage 5 output
+├── rebate form input/            ← stage 6 output, one file per supplier
+├── supplier info/                ← legacy; read once to seed contract_info.json
+└── template/
+    ├── templates.json            ← names, dates and which one is in use
+    ├── .preview/                 ← cached PDF renders
+    └── *.docx                    ← uploaded Word templates
 ```
 
-## Configuration
+Stage 7 output is not stored on disk: the contracts are zipped in a temporary
+folder and handed to the browser as a download.
 
-Settings are stored in `config.json` (project root, git-ignored):
+### Configuration
+
+`config.json` (project root, git-ignored):
 
 | Key | Description |
 |-----|-------------|
-| `nb_kb` | Path to NB KB source folder |
-| `dt_kb` | Path to DT KB source folder |
-| `peripheral` | Path to Peripheral source folder |
-| `last_fy` | Last FY selected (e.g. `FY26`) |
-| `last_quarter` | Last quarter selected (1–4); used to compute `<Effective Date>` in Stage 7 |
-| `form_numbers` | Per-supplier Form # map (e.g. `{"CHICONY": "9"}`) |
+| `nb_kb`, `dt_kb`, `peripheral` | Source folder paths |
+| `last_fy` / `last_quarter` | Last selection; pre-fills the dialogs and sets `ICMEffectiveDate` |
+| `form_numbers` | Per-supplier Form # |
+| `icertis_codes` | Per-supplier iCertis Code |
+
+On load the page writes a one-line self-report to `data/last-client.json` (local
+only) recording which dialogs were visible and whether the stylesheet applied —
+there to make a bad launch diagnosable after the fact.
+
+---
 
 ## Project structure
 
 ```
+start.bat                       ← launcher: starts the server, opens Chrome
 src/rebate_form_generator/
-├── main.py
-├── ui/
-│   └── main_window.py        ← CustomTkinter dark-mode UI + dialogs
+├── main.py                     ← entry point, single-instance check, Chrome launcher
+├── web/
+│   ├── server.py               ← http.server routes → pipeline calls
+│   ├── jobs.py                 ← single-slot job runner + SSE event hub
+│   ├── docx_preview.py         ← placeholder check + Word-driven PDF render
+│   └── static/                 ← index.html, style.css, app.js
 ├── config/
-│   └── settings.py           ← load / save config.json
+│   ├── settings.py             ← config.json
+│   ├── contract_info.py        ← contract details + shared values store
+│   └── templates.py            ← Word template registry
 └── consolidation/
-    ├── pipeline.py            ← public API + module-level cache
-    ├── stage1_ingest.py
-    ├── stage2_segment.py
-    ├── stage3_all.py
-    ├── stage4_rebate.py
-    ├── stage5_template.py
-    ├── stage6_rebate_form.py
-    └── stage7_report.py      ← Word contract generation
+    ├── pipeline.py             ← public API: scan → build → form data → report
+    ├── headers.py              ← header location, name folding, safe filenames
+    ├── issues.py               ← structured source-file problems for the pop-up
+    ├── stage1_ingest.py … stage7_report.py
 ```
+
+The web layer only translates HTTP into pipeline calls; all business logic stays
+in `consolidation/`. The UI talks to it over JSON, and the log streams back over
+Server-Sent Events, so reloading the page replays the current run instead of
+losing it.
+
+Asset URLs are stamped with the server's start id, so a restarted server can
+never be paired with a script or stylesheet the browser kept from an earlier run.
+
+## Packaging
+
+`build_exe.bat` and `RebateFormGenerator.spec` still target the old
+CustomTkinter desktop build and **do not work with the web UI** — the `.spec`
+needs `web/static/` added to its `datas`. Use `start.bat`.

@@ -6,12 +6,18 @@ the caller-supplied *raw_dir*.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Callable
 
 from openpyxl import load_workbook
 from openpyxl.workbook import Workbook
+
+from . import issues
+from .headers import HEADER_SCAN_ROWS, find_header_row, normalize_header
+
+PROVENANCE_FILE = "_provenance.json"
 
 # ---------------------------------------------------------------------------
 # Regexes
@@ -35,6 +41,36 @@ def _get_latest_xlsx(folder: Path) -> Path | None:
     """Return the most recently modified .xlsx that is not an Office temp file."""
     files = [f for f in folder.glob("*.xlsx") if not f.name.startswith("~$")]
     return max(files, key=lambda f: f.stat().st_mtime) if files else None
+
+
+def _open_source(path: Path, supplier: str, segment: str,
+                 log: Callable[[str, str], None]):
+    """Open a supplier workbook, reporting instead of crashing on failure.
+
+    A workbook left open in Excel cannot be read. One supplier's open file
+    must not take the whole run down with it, so the rest still processes and
+    the user is told exactly which file to close.
+    """
+    try:
+        return load_workbook(path, data_only=True)
+    except PermissionError:
+        log(f"  [{segment}] {supplier}: '{path.name}' is open in another program "
+            f"(most likely Excel) — skipped", "ERROR")
+        issues.add(
+            issues.FILE_LOCKED,
+            f"This workbook is open in another program (most likely Excel), so "
+            f"{supplier}'s {segment} data was left out. Close it and run again.",
+            file=path.name, path=str(path), supplier=supplier,
+        )
+    except Exception as exc:
+        log(f"  [{segment}] {supplier}: cannot read '{path.name}': {exc}", "ERROR")
+        issues.add(
+            issues.FILE_LOCKED,
+            f"This workbook could not be read ({exc}), so {supplier}'s "
+            f"{segment} data was left out.",
+            file=path.name, path=str(path), supplier=supplier,
+        )
+    return None
 
 
 def _parse_supplier_name(folder_name: str) -> str:
@@ -64,17 +100,109 @@ def _find_segment_root(parent: Path, keyword: str) -> Path | None:
     return None
 
 
-def _fix_gtk_suppliers(wb: Workbook, supplier_name: str) -> None:
-    """Overwrite every 'GTK Suppliers' column (Row 3+) with *supplier_name*."""
+def _record_provenance(raw_dir: Path, ingested_name: str, source: Path, supplier: str) -> None:
+    """Remember which original file an ingested workbook came from.
+
+    Later stages only see the copy under ``source data/``; this map lets their
+    warnings name the real file the user has to go and fix.
+    """
+    store = raw_dir.parent / PROVENANCE_FILE
+    data: dict = {}
+    if store.exists():
+        try:
+            data = json.loads(store.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            data = {}
+    data[ingested_name] = {"path": str(source), "supplier": supplier}
+    try:
+        store.parent.mkdir(parents=True, exist_ok=True)
+        store.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def load_provenance_dir(source_data_dir: Path) -> dict[str, dict]:
+    """Read the map written by :func:`_record_provenance`."""
+    store = source_data_dir / PROVENANCE_FILE
+    if not store.exists():
+        return {}
+    try:
+        return json.loads(store.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+
+
+def load_provenance(raw_dir: Path) -> dict[str, dict]:
+    """As :func:`load_provenance_dir`, for a per-segment raw directory."""
+    return load_provenance_dir(raw_dir.parent)
+
+
+def provenance_by_supplier(source_data_dir: Path) -> dict[str, list[dict]]:
+    """``{supplier: [{"file": name, "path": original path}, ...]}``."""
+    out: dict[str, list[dict]] = {}
+    for name, meta in load_provenance_dir(source_data_dir).items():
+        supplier = meta.get("supplier", "")
+        if supplier:
+            out.setdefault(supplier, []).append({"file": name, "path": meta.get("path", "")})
+    return out
+
+
+def _fix_gtk_suppliers(
+    wb: Workbook,
+    supplier_name: str,
+    *,
+    file_name: str,
+    file_path: str,
+    log: Callable[[str, str], None],
+    fy: str | None = None,
+) -> None:
+    """Overwrite the 'GTK Suppliers' column with *supplier_name* for data rows.
+
+    The header is **not** assumed to be on row 2: suppliers sometimes insert a
+    row above it, which previously made this fix silently do nothing.
+    """
     for ws in wb.worksheets:
-        for col_idx in range(1, ws.max_column + 1):
-            cell = ws.cell(row=2, column=col_idx)
-            if cell.value is None:
+        title = ws.title.strip()
+        # Only FY data sheets are worth reporting on; notes/lookup tabs are not.
+        nb_match = NB_SHEET_RE.match(title)
+        is_data_sheet = bool(nb_match or FY_SHEET_RE.match(title))
+        if is_data_sheet and fy:
+            sheet_fy = f"FY{nb_match.group(1)}" if nb_match else title.upper()
+            if sheet_fy.upper() != fy.upper():
+                # A different year than the one being built: not our business,
+                # so neither fix it nor complain about it.
                 continue
-            normalised = str(cell.value).replace("\n", " ").strip().lower()
-            if normalised == "gtk suppliers":
-                for row_idx in range(3, ws.max_row + 1):
+
+        rows = [tuple(r) for r in ws.iter_rows(min_row=1, max_row=HEADER_SCAN_ROWS,
+                                               values_only=True)]
+        hidx = find_header_row(rows)
+        if hidx is None:
+            if is_data_sheet:
+                log(f"    [{file_name}] sheet '{ws.title}': header row not found "
+                    f"— GTK Suppliers not normalised", "WARNING")
+                issues.add(
+                    issues.HEADER_MISSING,
+                    f"No row starting with 'Segment' was found in the first "
+                    f"{HEADER_SCAN_ROWS} rows, so the header could not be located "
+                    f"and the GTK Suppliers column was not normalised.",
+                    file=file_name, path=file_path, sheet=ws.title, supplier=supplier_name,
+                )
+            continue
+
+        header_excel_row = hidx + 1          # openpyxl rows are 1-based
+        if header_excel_row != 2 and is_data_sheet:
+            # The header is located per sheet, so a row inserted above it
+            # costs nothing: the data is read correctly either way. Worth a
+            # log line, not a warning the user has to dismiss.
+            log(f"    [{file_name}] sheet '{ws.title}': header found on row "
+                f"{header_excel_row} (not the usual row 2) - read from there",
+                "INFO")
+
+        for col_idx, value in enumerate(rows[hidx], start=1):
+            if normalize_header(value) == "gtk suppliers":
+                for row_idx in range(header_excel_row + 1, ws.max_row + 1):
                     ws.cell(row=row_idx, column=col_idx).value = supplier_name
+                break
 
 
 def _copy_ws_to_wb(src_ws, target_wb: Workbook, sheet_name: str) -> None:
@@ -88,10 +216,100 @@ def _copy_ws_to_wb(src_ws, target_wb: Workbook, sheet_name: str) -> None:
 # Public functions
 # ---------------------------------------------------------------------------
 
+def scan_nb(
+    nb_kb_path: Path,
+    log: Callable[[str, str], None],
+) -> tuple[dict[str, dict[str, list[str]]], set[str]]:
+    """Which FY years each NB supplier has, from sheet names alone.
+
+    Reads no cell data, so it is fast enough to run before asking which FY to
+    build. A year counts only when the supplier has both bNB and cNB, which
+    is the same rule :func:`ingest_nb` applies.
+    """
+    seg_root = _find_segment_root(nb_kb_path, "Master price table_NB")
+    if seg_root is None:
+        log(f"Cannot find 'Master price table_NB' sub-folder in {nb_kb_path}", "ERROR")
+        return {"bNB": {}, "cNB": {}}, set()
+
+    folder_re = _make_supplier_folder_re("NB")
+    cov_b: dict[str, list[str]] = {}
+    cov_c: dict[str, list[str]] = {}
+    all_fy: set[str] = set()
+
+    for folder in sorted(seg_root.iterdir()):
+        if not folder.is_dir() or not folder_re.match(folder.name):
+            continue
+        latest = _get_latest_xlsx(folder)
+        if latest is None:
+            continue
+        supplier = _parse_supplier_name(folder.name)
+        try:
+            wb = load_workbook(latest, data_only=True, read_only=True)
+            titles = list(wb.sheetnames)
+            wb.close()
+        except Exception as exc:
+            log(f"  NB: cannot read '{latest.name}': {exc}", "WARNING")
+            continue
+
+        fy_types: dict[str, set[str]] = {}
+        for title in titles:
+            m = NB_SHEET_RE.match(title.strip())
+            if m:
+                fy_types.setdefault(f"FY{m.group(1)}", set()).add(m.group(2).lower())
+        both = sorted(fy for fy, kinds in fy_types.items() if {"b", "c"} <= kinds)
+        if both:
+            cov_b[supplier] = both
+            cov_c[supplier] = both
+            all_fy.update(both)
+
+    return {"bNB": cov_b, "cNB": cov_c}, all_fy
+
+
+def scan_segment(
+    segment_path: Path,
+    segment_name: str,
+    log: Callable[[str, str], None],
+) -> tuple[dict[str, list[str]], set[str]]:
+    """As :func:`scan_nb`, for DT and Peripheral."""
+    seg_root = _find_segment_root(segment_path, f"Master price table_{segment_name}")
+    if seg_root is None:
+        log(f"Cannot find 'Master price table_{segment_name}' sub-folder "
+            f"in {segment_path}", "ERROR")
+        return {}, set()
+
+    folder_re = _make_supplier_folder_re(segment_name)
+    coverage: dict[str, list[str]] = {}
+    all_fy: set[str] = set()
+
+    for folder in sorted(seg_root.iterdir()):
+        if not folder.is_dir() or not folder_re.match(folder.name):
+            continue
+        latest = _get_latest_xlsx(folder)
+        if latest is None:
+            continue
+        supplier = _parse_supplier_name(folder.name)
+        try:
+            wb = load_workbook(latest, data_only=True, read_only=True)
+            titles = list(wb.sheetnames)
+            wb.close()
+        except Exception as exc:
+            log(f"  {segment_name}: cannot read '{latest.name}': {exc}", "WARNING")
+            continue
+
+        found = sorted({t.strip().upper() for t in titles
+                        if FY_SHEET_RE.match(t.strip())})
+        if found:
+            coverage[supplier] = found
+            all_fy.update(found)
+
+    return coverage, all_fy
+
+
 def ingest_nb(
     nb_kb_path: Path,
     raw_nb_dir: Path,
     log: Callable[[str, str], None],
+    fy: str | None = None,
 ) -> dict[str, list[str]]:
     """Stage 1 for NB KB — split each supplier into bNB and cNB workbooks.
 
@@ -128,8 +346,11 @@ def ingest_nb(
         supplier_name = _parse_supplier_name(supplier_folder.name)
         log(f"  NB supplier: {supplier_name}  ←  {latest.name}", "INFO")
 
-        wb = load_workbook(latest, data_only=True)
-        _fix_gtk_suppliers(wb, supplier_name)
+        wb = _open_source(latest, supplier_name, "NB", log)
+        if wb is None:
+            continue
+        _fix_gtk_suppliers(wb, supplier_name, file_name=latest.name,
+                           file_path=str(latest), log=log, fy=fy)
         supplier_data[supplier_name] = {"path": latest, "wb": wb}
 
     if not supplier_data:
@@ -150,7 +371,9 @@ def ingest_nb(
                 nb_type = m.group(2).lower()
                 fy_types.setdefault(fy, set()).add(nb_type)
         # Only include FY years where THIS supplier has both 'b' and 'c'
-        both = {fy for fy, types in fy_types.items() if "c" in types and "b" in types}
+        both = {y for y, types in fy_types.items() if "c" in types and "b" in types}
+        if fy:
+            both = {y for y in both if y.upper() == fy.upper()}
         valid_fy_per_supplier[supplier_name] = both
         log(f"  NB {supplier_name} valid FY: {sorted(both)}", "INFO")
 
@@ -187,6 +410,7 @@ def ingest_nb(
         if wb_out.worksheets:
             fname = f"{data['path'].stem}.xlsx"
             wb_out.save(raw_nb_dir / fname)
+            _record_provenance(raw_nb_dir, fname, data["path"], supplier_name)
             log(
                 f"    → NB/{fname}  "
                 f"({len(fy_bnb)} bNB + {len(fy_cnb)} cNB sheets)",
@@ -205,6 +429,7 @@ def ingest_segment(
     segment_name: str,
     raw_dir: Path,
     log: Callable[[str, str], None],
+    fy: str | None = None,
 ) -> list[str]:
     """Stage 1 for DT or Peripheral.
 
@@ -245,8 +470,11 @@ def ingest_segment(
         supplier_name = _parse_supplier_name(supplier_folder.name)
         log(f"  {segment_name} supplier: {supplier_name}  ←  {latest.name}", "INFO")
 
-        wb = load_workbook(latest, data_only=True)
-        _fix_gtk_suppliers(wb, supplier_name)
+        wb = _open_source(latest, supplier_name, segment_name, log)
+        if wb is None:
+            continue
+        _fix_gtk_suppliers(wb, supplier_name, file_name=latest.name,
+                           file_path=str(latest), log=log, fy=fy)
 
         # Build output workbook with only FY sheets, normalised names
         wb_out: Workbook = Workbook()
@@ -254,11 +482,15 @@ def ingest_segment(
 
         for ws in wb.worksheets:
             stripped = ws.title.strip()
-            if FY_SHEET_RE.match(stripped):
-                _copy_ws_to_wb(ws, wb_out, stripped.upper())
+            if not FY_SHEET_RE.match(stripped):
+                continue
+            if fy and stripped.upper() != fy.upper():
+                continue          # only the FY that was asked for
+            _copy_ws_to_wb(ws, wb_out, stripped.upper())
 
         if wb_out.worksheets:
             wb_out.save(raw_dir / latest.name)
+            _record_provenance(raw_dir, latest.name, latest, supplier_name)
             log(f"    → {segment_name}/{latest.name}  ({len(wb_out.worksheets)} sheets)", "INFO")
             coverage[supplier_name] = [ws.title for ws in wb_out.worksheets]
 
