@@ -32,24 +32,76 @@ def find_chrome() -> str | None:
 
 
 def chrome_profile_dir() -> Path:
-    base = os.environ.get("LocalAppData") or str(Path.home())
-    path = Path(base) / APP_NAME / "chrome-profile"
+    """Kept beside the app's other data, so everything it stores is in one place."""
+    from rebate_form_generator.config.settings import default_work_dir
+
+    path = default_work_dir() / "browser-profile"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+# Left alone, Chrome fills this profile with component downloads, ML models,
+# a Safe Browsing database and a TTS engine — hundreds of megabytes of things
+# a single localhost page never uses. Past this size the profile is rebuilt.
+PROFILE_SIZE_LIMIT = 120 * 1024 * 1024
+
+
+def _dir_size(path: Path) -> int:
+    total = 0
+    try:
+        for f in path.rglob("*"):
+            try:
+                if f.is_file():
+                    total += f.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return total
+
+
+def reset_profile_if_large(profile: Path) -> int:
+    """Rebuild the browser profile once it has grown past the limit.
+
+    Nothing of the user's lives in it: it exists only so the app window is
+    separate from their normal Chrome. Discarding it costs nothing.
+    """
+    size = _dir_size(profile)
+    if size <= PROFILE_SIZE_LIMIT:
+        return 0
+    import shutil
+    shutil.rmtree(profile, ignore_errors=True)
+    profile.mkdir(parents=True, exist_ok=True)
+    return size
 
 
 def launch_chrome(url: str) -> subprocess.Popen | None:
     chrome = find_chrome()
     if not chrome:
         return None
+    profile = chrome_profile_dir()
+    freed = reset_profile_if_large(profile)
+    if freed:
+        print(f"  Reset the browser profile ({freed // (1024 * 1024)} MB reclaimed).")
+
     args = [
         chrome,
         f"--app={url}",
-        f"--user-data-dir={chrome_profile_dir()}",
+        f"--user-data-dir={profile}",
         "--no-first-run",
         "--no-default-browser-check",
         "--disable-background-mode",
         "--window-size=1100,820",
+        # Keep the profile small: this page is local and needs none of it.
+        "--disable-background-networking",   # component + Safe Browsing updates
+        "--disable-component-update",
+        "--disable-extensions",
+        "--disable-sync",
+        "--disable-default-apps",
+        "--no-service-autorun",
+        "--disable-features=OptimizationHints,Translate,MediaRouter,"
+        "OptimizationGuideModelDownloading",
+        "--disk-cache-size=16777216",        # 16 MB
     ]
     try:
         return subprocess.Popen(args)

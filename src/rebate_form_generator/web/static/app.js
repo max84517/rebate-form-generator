@@ -1450,6 +1450,13 @@ function wire() {
     };
   });
 
+  $("#btn-open-work").onclick = async () => {
+    try {
+      const res = await api("/api/open-folder", { which: "work" });
+      toast(res.path, "ok", 5000);
+    } catch (err) { toast(err.message); }
+  };
+
   $("#btn-tracker").onclick = openTracker;
   $("#tracker-refresh").onclick = refreshTracker;
 

@@ -12,16 +12,16 @@ Usage::
         "dt_kb":      r"C:\\Data\\DT KB",
         "peripheral": r"C:\\Data\\Peripheral",
     }
-    output_path = Path("data/output")
+    work_dir = Path(r"%LOCALAPPDATA%/RebateFormGenerator")
 
     def log(msg, level):
         print(f"[{level}] {msg}")
 
-    # Run Stage 1-4, get available FY sheets
-    fy_list = get_available_fy_sheets(source_paths, output_path, log)
+    # Find which FY each supplier has (sheet names only)
+    fy_list, coverage = scan_fy_coverage(source_paths, log)
 
-    # Run Stage 5 (reuses cached Stage 1-4 results)
-    out = run_full_pipeline(source_paths, "FY25", output_path, log)
+    # Build that FY end to end
+    out = run_full_pipeline(source_paths, "FY25", work_dir, log)
 """
 from __future__ import annotations
 
@@ -46,7 +46,7 @@ from .stage7_report import generate_report
 # Module-level cache: stores results from the last successful Stage 1-4 run
 _cache: dict = {
     "rebate_path": None,
-    "output_path": None,
+    "work_dir": None,
     "pricing_data_dir": None,
     "coverage": None,
 }
@@ -88,19 +88,17 @@ def scan_fy_coverage(
 def build_rebate_raw(
     source_paths: dict,
     fy_sheet: str,
-    output_path: Path,
+    work_dir: Path,
     log: Callable[[str, str], None],
 ) -> list[str]:
     """Run Stages 1–4 for a single FY and return the sheet names produced."""
     issues.reset()
     fy = fy_sheet.strip().upper()
 
-    # Directories derived from output_path
-    #   data/source data  → ingested supplier workbooks
-    #   data/pricing data → final output (rebate raw.xlsx)
-    #   system temp       → stage 2-4 intermediates (never written to data/)
-    source_data_dir = output_path.parent / "source data"
-    pricing_data_dir = output_path.parent / "rebate raw"
+    # Everything here is derived data, so it all lives under work_dir
+    # rather than in the (OneDrive-synced) project folder.
+    source_data_dir = work_dir / "source data"
+    pricing_data_dir = work_dir / "rebate raw"
 
     def _rmtree(path: Path) -> None:
         def _on_err(func, p, exc_info):
@@ -120,11 +118,6 @@ def build_rebate_raw(
         if seg_dir.exists():
             log(f"  Clearing {seg_dir.name} source data …", "INFO")
             _rmtree(seg_dir)
-
-    # Remove legacy output/tmp if it still exists from an older run
-    legacy_tmp = output_path / "tmp"
-    if legacy_tmp.exists():
-        _rmtree(legacy_tmp)
 
     # Stage 2-4 intermediates go to the system temp directory
     tmp_dir = Path(tempfile.gettempdir()) / "rebate_form_generator"
@@ -190,7 +183,7 @@ def build_rebate_raw(
 
     # Cache results
     _cache["rebate_path"] = rebate_path
-    _cache["output_path"] = output_path
+    _cache["work_dir"] = work_dir
     _cache["pricing_data_dir"] = pricing_data_dir
     _cache["coverage"] = coverage
     _cache["fy"] = fy
@@ -207,14 +200,14 @@ def build_rebate_raw(
 def run_full_pipeline(
     source_paths: dict,
     fy_sheet: str,
-    output_path: Path,
+    work_dir: Path,
     log: Callable[[str, str], None],
 ) -> Path | None:
     """Run Stages 1–5 for *fy_sheet* only.
 
     Returns the path to ``rebate raw.xlsx``, or ``None``.
     """
-    fy_sheets = build_rebate_raw(source_paths, fy_sheet, output_path, log)
+    fy_sheets = build_rebate_raw(source_paths, fy_sheet, work_dir, log)
     rebate_path: Path | None = _cache.get("rebate_path")
     if rebate_path is None:
         log("Nothing to write: no data survived stages 1-4.", "ERROR")
@@ -223,7 +216,7 @@ def run_full_pipeline(
         log(f"'{fy_sheet}' produced no data. Sheets built: {fy_sheets}", "ERROR")
         return None
 
-    pricing_data_dir: Path = _cache.get("pricing_data_dir") or (output_path.parent / "pricing data")
+    pricing_data_dir: Path = _cache.get("pricing_data_dir") or (work_dir / "rebate raw")
 
     log("=== Stage 5: Write Pricing Template ===", "INFO")
     return write_pricing_template(rebate_path, fy_sheet, pricing_data_dir, log)
@@ -312,7 +305,7 @@ def check_missing_fy_sheets(
 
 
 def run_rebate_form_pipeline(
-    output_path: Path,
+    work_dir: Path,
     fy: int,
     quarter: int,
     selected_columns: list[str],
@@ -326,14 +319,15 @@ def run_rebate_form_pipeline(
     Returns a list of paths to the written files (empty list on failure).
     """
     issues.reset()
-    rebate_raw_path = output_path.parent / "rebate raw" / "rebate raw.xlsx"
-    output_dir = output_path.parent / "rebate form input"
+    rebate_raw_path = work_dir / "rebate raw" / "rebate raw.xlsx"
+    output_dir = work_dir / "rebate form input"
     log(f"=== Stage 6: Generate Form Data (FY{fy:02d} Q{quarter}) ===", "INFO")
     return generate_rebate_form(rebate_raw_path, fy, quarter, selected_columns, output_dir, log)
 
 
 def run_report_pipeline(
-    output_path: Path,
+    work_dir: Path,
+    data_dir: Path,
     suppliers: list[str],
     form_numbers: dict[str, str],
     log: Callable[[str, str], None],
@@ -348,13 +342,14 @@ def run_report_pipeline(
     list of column names that contain at least one blank cell.
     """
     issues.reset()
-    base = output_path.parent
-    supplier_info_dir = base / "supplier info"
-    template_dir = base / "template"
-    rebate_form_input_dir = base / "rebate form input"
+    # Inputs the user maintains come from data_dir; the contract input the
+    # pipeline just built comes from work_dir.
+    supplier_info_dir = data_dir / "supplier info"
+    template_dir = data_dir / "template"
+    rebate_form_input_dir = work_dir / "rebate form input"
     log(f"=== Stage 7: Generate Report ===", "INFO")
     return generate_report(
         supplier_info_dir, template_dir, rebate_form_input_dir,
-        destination or output_path, suppliers, form_numbers, log,
+        destination or (work_dir / "contracts"), suppliers, form_numbers, log,
         fy, quarter, icertis_codes,
     )

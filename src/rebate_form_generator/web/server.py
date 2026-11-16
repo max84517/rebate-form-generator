@@ -94,6 +94,54 @@ SEGMENT_KEYWORD = {
 SEGMENT_TITLE = {"nb_kb": "NB KB", "dt_kb": "DT KB", "peripheral": "Peripheral"}
 
 
+#: How many generated contract bundles to keep before the oldest is dropped.
+KEEP_BUNDLES = 3
+
+
+def prune_bundles(cache_dir: Path, keep: int = KEEP_BUNDLES) -> int:
+    """Keep only the newest *keep* contract zips.
+
+    Each Generate Report leaves a zip behind so the browser can fetch it. They
+    used to accumulate forever in the system temp folder; now they live in the
+    cache and the old ones are dropped.
+    """
+    removed = 0
+    try:
+        zips = sorted(cache_dir.glob("rfg_report_*.zip"),
+                      key=lambda f: f.stat().st_mtime, reverse=True)
+    except OSError:
+        return 0
+    for old in zips[keep:]:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            pass
+    # Scratch folders only exist while a report is being built.
+    for stale in cache_dir.glob("rfg_report_*"):
+        if stale.is_dir():
+            shutil.rmtree(stale, ignore_errors=True)
+    return removed
+
+
+def sweep_legacy_temp() -> int:
+    """Delete report zips earlier versions left in the system temp folder."""
+    removed = 0
+    try:
+        for old in Path(tempfile.gettempdir()).glob("rfg_report_*"):
+            try:
+                if old.is_dir():
+                    shutil.rmtree(old, ignore_errors=True)
+                else:
+                    old.unlink()
+                removed += 1
+            except OSError:
+                pass
+    except OSError:
+        pass
+    return removed
+
+
 def file_tracker(source_paths: dict) -> dict:
     """The newest workbook in every supplier folder, and whether it is current.
 
@@ -285,12 +333,19 @@ class App:
 
     # ── paths ────────────────────────────────────────────────────────
     @property
-    def output_path(self) -> Path:
-        return Path(self.settings.output_path)
+    def data_dir(self) -> Path:
+        """User-maintained inputs, inside the project."""
+        return self.settings.data_dir
 
     @property
+    def work_dir(self) -> Path:
+        """Derived data, outside the project so OneDrive does not sync it."""
+        return self.settings.work_dir
+
+    # Kept so existing call sites reading inputs stay correct.
+    @property
     def base_dir(self) -> Path:
-        return self.output_path.parent
+        return self.data_dir
 
     # ── config ───────────────────────────────────────────────────────
     def config_payload(self) -> dict:
@@ -300,7 +355,8 @@ class App:
             "nb_kb": s.nb_kb,
             "dt_kb": s.dt_kb,
             "peripheral": s.peripheral,
-            "output_path": s.output_path,
+            "data_dir": str(self.data_dir),
+            "work_dir": str(self.work_dir),
             "last_fy": s.last_fy,
             "last_quarter": s.last_quarter,
             "form_numbers": s.form_numbers,
@@ -311,8 +367,8 @@ class App:
             "default_checked": DEFAULT_CHECKED,
             "current_fy": cur_fy,
             "current_quarter": cur_q,
-            "rebate_raw_exists": (self.base_dir / "rebate raw" / "rebate raw.xlsx").exists(),
-            "form_input_exists": (self.base_dir / "rebate form input").exists(),
+            "rebate_raw_exists": (self.work_dir / "rebate raw" / "rebate raw.xlsx").exists(),
+            "form_input_exists": (self.work_dir / "rebate form input").exists(),
         }
 
     def save_paths(self, nb_kb: str, dt_kb: str, peripheral: str) -> None:
@@ -341,7 +397,7 @@ class App:
 
     # ── suppliers ────────────────────────────────────────────────────
     def detect_suppliers(self) -> list[str]:
-        folder = self.base_dir / "rebate form input"
+        folder = self.work_dir / "rebate form input"
         if not folder.exists():
             return []
         return [
@@ -576,6 +632,23 @@ class Handler(BaseHTTPRequestHandler):
             hub.clear_history()
             return self._json({"ok": True})
 
+        if route == "/api/open-folder":
+            which = str(data.get("which", "work"))
+            target = {"work": app.work_dir, "data": app.data_dir,
+                      "rebate-raw": app.work_dir / "rebate raw",
+                      "form-input": app.work_dir / "rebate form input"}.get(which)
+            if target is None:
+                return self._json({"ok": False, "error": "Unknown folder"}, 400)
+            target.mkdir(parents=True, exist_ok=True)
+            try:
+                os.startfile(str(target))      # noqa: S606 - local, user-initiated
+            except AttributeError:
+                return self._json({"ok": False,
+                                   "error": "Only supported on Windows."}, 400)
+            except OSError as exc:
+                return self._json({"ok": False, "error": str(exc)}, 400)
+            return self._json({"ok": True, "path": str(target)})
+
         if route == "/api/client-report":
             # The page describes itself right after it boots. Written to disk
             # so a launch can be diagnosed afterwards without a debugger.
@@ -614,7 +687,7 @@ class Handler(BaseHTTPRequestHandler):
             app.save_paths(data["nb_kb"], data["dt_kb"], data["peripheral"])
             run_all = bool(data.get("run_all"))
             source_paths = dict(app.source_paths)
-            output_path = app.output_path
+            work_dir = app.work_dir
 
             def job(log):
                 hub.clear_history()
@@ -639,10 +712,10 @@ class Handler(BaseHTTPRequestHandler):
             app.remember_fy(fy_sheet)
             run_all = bool(data.get("run_all"))
             source_paths = dict(app.source_paths)
-            output_path = app.output_path
+            work_dir = app.work_dir
 
             def job(log):
-                result = run_full_pipeline(source_paths, fy_sheet, output_path, log)
+                result = run_full_pipeline(source_paths, fy_sheet, work_dir, log)
                 if result:
                     log(f"=== {fy_sheet} rebate raw written \u2192 {result} ===", "INFO")
                 else:
@@ -669,10 +742,10 @@ class Handler(BaseHTTPRequestHandler):
             columns = [c for c in data.get("columns", []) if c in OPTIONAL_COLUMNS]
             app.remember_quarter(fy, quarter)
             run_all = bool(data.get("run_all"))
-            output_path = app.output_path
+            work_dir = app.work_dir
 
             def job(log):
-                result = run_rebate_form_pipeline(output_path, fy, quarter, columns, log)
+                result = run_rebate_form_pipeline(work_dir, fy, quarter, columns, log)
                 if result:
                     log(f"=== Form Data saved: {len(result)} file(s) "
                         f"\u2192 {result[0].parent} ===", "INFO")
@@ -718,14 +791,16 @@ class Handler(BaseHTTPRequestHandler):
 
             fy = app.fy_int()
             quarter = app.settings.last_quarter or None
-            output_path = app.output_path
+            work_dir = app.work_dir
+            data_dir = app.data_dir
+            cache_dir = app.settings.cache_dir
 
             def job(log):
-                # Contracts are built in a temp folder and handed to the
-                # browser as one zip; nothing is left in data/output.
-                work = Path(tempfile.mkdtemp(prefix="rfg_report_"))
+                # Contracts are built in a scratch folder and handed to the
+                # browser as one zip; nothing is kept in the project folder.
+                work = Path(tempfile.mkdtemp(prefix="rfg_report_", dir=cache_dir))
                 out_paths, blanks = run_report_pipeline(
-                    output_path, suppliers, form_numbers, log, fy, quarter, icertis,
+                    work_dir, data_dir, suppliers, form_numbers, log, fy, quarter, icertis,
                     destination=work)
                 if not out_paths:
                     log("Failed to generate report. See log for details.", "ERROR")
@@ -744,6 +819,7 @@ class Handler(BaseHTTPRequestHandler):
 
                 token = uuid.uuid4().hex
                 app.bundles[token] = (zip_path, zip_name)
+                prune_bundles(cache_dir)
                 log(f"=== {len(out_paths)} contract(s) packaged as {zip_name} "
                     f"\u2014 downloading \u2192 your Downloads folder ===", "INFO")
                 return {
@@ -906,6 +982,9 @@ def pick_port(preferred: int, attempts: int = 20) -> int:
 
 def make_server(port: int) -> tuple[ThreadingHTTPServer, App]:
     app = App()
+    # Tidy up after earlier versions, then keep the cache bounded.
+    sweep_legacy_temp()
+    prune_bundles(app.settings.cache_dir)
     handler = type("BoundHandler", (Handler,), {"app": app})
     httpd = _Server(("127.0.0.1", port), handler)
     return httpd, app

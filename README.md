@@ -15,10 +15,11 @@ start.bat  →  local server on 127.0.0.1:8765  →  Chrome app window
 
 ## Quick start
 
-**Double-click `start.bat`.**
+**Double-click `start.bat`.** That is the whole install.
 
-It starts the server and opens the UI in a Chrome app-mode window with its own
-profile. Closing that window stops the server; launching again while a window is
+On a fresh clone the first run creates `.venv`, installs the two dependencies
+and then starts up - a minute, once. After that it starts the server and opens
+the UI in a Chrome app-mode window with its own profile. Closing that window stops the server; launching again while a window is
 open reuses it rather than starting a second server.
 
 From a shell instead:
@@ -36,8 +37,7 @@ poetry run rebate-form-generator --browser none --port 9000
 
 ### Requirements
 
-- Python ≥ 3.10
-- [Poetry](https://python-poetry.org/) ≥ 1.8 (for development)
+- Python ≥ 3.10 — `start.bat` builds the environment itself
 - Google Chrome — optional, falls back to the default browser
 - Microsoft Word — optional, only for rendering the template preview
 
@@ -48,7 +48,7 @@ dependencies.
 ```bash
 git clone https://github.com/max84517/rebate-form-generator.git
 cd rebate-form-generator
-poetry install
+poetry install          # optional; start.bat does this for you
 ```
 
 ---
@@ -287,23 +287,51 @@ per supplier:
 e.g. `Master price table_NB_CHICONY`, `Master price table_DT_PRIMAX`.
 Folders that do not match the pattern are skipped with a warning.
 
-### Data layout
+### Where files live
+
+Two locations, and the split is deliberate.
+
+**In the project** - what you maintain. Small, changes rarely, belongs with
+the code:
 
 ```
 data/
-├── contract_info.json            ← supplier contract details (Settings; git-ignored)
-├── source data/                  ← ingested supplier workbooks, one FY at a time
-├── rebate raw/rebate raw.xlsx    ← stage 5 output
-├── rebate form input/            ← stage 6 output, one file per supplier
-├── supplier info/                ← legacy; read once to seed contract_info.json
-└── template/
-    ├── templates.json            ← names, dates and which one is in use
-    ├── .preview/                 ← cached PDF renders
-    └── *.docx                    ← uploaded Word templates
+|-- contract_info.json   <- supplier details + shared values (git-ignored)
+|-- supplier info/       <- legacy workbook; read once to seed the above
+`-- template/
+    |-- templates.json   <- names, dates, which one is in use (git-ignored)
+    `-- *.docx           <- Word templates
 ```
 
-Stage 7 output is not stored on disk: the contracts are zipped in a temporary
-folder and handed to the browser as a download.
+**In `C:\Users\<you>\.rebate-form-generator`** - everything the
+pipeline derives, rebuilt on every run:
+
+```
+source data/          <- ingested supplier workbooks, one FY at a time
+rebate raw/           <- stage 5 output
+rebate form input/    <- stage 6 output, one file per supplier
+cache/                <- template PDF previews, generated contract zips
+browser-profile/      <- the Chrome profile for the app window
+```
+
+The project folder is normally inside OneDrive and the derived files are
+rewritten on every run, so keeping them out means a couple of megabytes are
+not re-synced each time and the repository stays source-only. The **Working
+files** button next to Run All opens that folder.
+
+It is deliberately not `%LOCALAPPDATA%`: the virtualenv is built on the
+Microsoft Store Python, which runs in an app container and silently redirects
+AppData writes into a private per-package folder - the app would find its
+files, but Explorer would open an empty directory. Set
+`REBATE_FORM_GENERATOR_HOME` to override the location.
+
+The cache limits itself: only the three most recent contract zips are kept,
+and the browser profile is rebuilt whenever it grows past 120 MB (Chrome
+otherwise fills it with component downloads and ML models that a localhost
+page never uses).
+
+Stage 7 output is not stored anywhere permanent: the contracts are zipped and
+handed to the browser as a download.
 
 ### Configuration
 
